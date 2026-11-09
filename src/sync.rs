@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, HashSet};
-use std::fs::{self, File};
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -8,13 +8,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use chrono::{Local, Utc};
 use walkdir::WalkDir;
 
-use crate::history::{load_baseline, save_baseline, save_manifest, unique_snapshot_name};
-use crate::lock::acquire_lock;
-use crate::models::{FileChange, FileState, RunSummary, SnapshotManifest};
+use crate::history::{
+    is_flat_repo, load_baseline, load_flat_manifest, save_baseline, save_flat_manifest,
+    save_manifest, unique_snapshot_name,
+};
+use crate::lock::{acquire_flat_lock, acquire_lock};
+use crate::models::{FileChange, FileState, FlatManifest, RunSummary, SnapshotManifest};
 use crate::util::{
     build_mappings, cleanup_empty_parents, compute_file_crc32, copy_atomic, get_file_metadata,
-    get_file_permissions, is_safe_relative_path, normalize_rel_path, sanitize_segment,
-    validate_sync_paths,
+    get_file_permissions, is_reserved_flat_name, is_safe_relative_path, normalize_rel_path,
+    sanitize_segment, split_stem_ext, validate_sync_paths,
 };
 
 static COPY_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -44,7 +47,21 @@ pub fn run_create(
 ) -> io::Result<Option<SnapshotManifest>> {
     validate_sync_paths(sources, dest)?;
 
-    let mappings = build_mappings(sources, opts.flatten);
+    // Check if destination is already a flat repo or if --flatten requested
+    let is_flat = opts.flatten || is_flat_repo(dest);
+    if is_flat {
+        return run_create_flat(opts, sources, dest);
+    }
+
+    run_create_standard(opts, sources, dest)
+}
+
+fn run_create_standard(
+    opts: &SyncOptions,
+    sources: &[PathBuf],
+    dest: &Path,
+) -> io::Result<Option<SnapshotManifest>> {
+    let mappings = build_mappings(sources, false);
     let _lock = if !opts.dry_run {
         Some(acquire_lock(dest)?)
     } else {
@@ -84,6 +101,8 @@ pub fn run_create(
                             rel_str.clone(),
                             FileState {
                                 path: rel_str,
+                                stored_name: None,
+                                archive_name: None,
                                 size,
                                 mtime_ns,
                                 crc32: compute_file_crc32(path).ok(),
@@ -146,6 +165,8 @@ pub fn run_create(
                 };
                 new_state.push(FileState {
                     path: rel_str.clone(),
+                    stored_name: None,
+                    archive_name: None,
                     size,
                     mtime_ns,
                     crc32,
@@ -208,6 +229,8 @@ pub fn run_create(
                         };
                         new_state.push(FileState {
                             path: rel_str.clone(),
+                            stored_name: None,
+                            archive_name: None,
                             size,
                             mtime_ns,
                             crc32,
@@ -233,9 +256,9 @@ pub fn run_create(
     let now_local = Local::now();
     let raw_now_name = now_local.format("%Y-%m-%d_%H%M%S").to_string();
 
-    let archive_snap_name = if let Some(ref pm) = prior_manifest {
-        if !pm.snapshot_name.is_empty() {
-            unique_snapshot_name(&hist_dir, &pm.snapshot_name)
+    let archive_snap_name = if let Some(ref last_manifest) = prior_manifest {
+        if !last_manifest.snapshot_name.is_empty() {
+            last_manifest.snapshot_name.clone()
         } else {
             unique_snapshot_name(&hist_dir, &raw_now_name)
         }
@@ -249,7 +272,7 @@ pub fn run_create(
     let mut changes: Vec<FileChange> = Vec::new();
     let mut summary = RunSummary::default();
 
-    // 1. Process deletions first (so file->directory and directory->file replacements succeed)
+    // 1. Process deletions first
     for (old_path, old_state) in &baseline_map {
         if !is_safe_relative_path(old_path) {
             continue;
@@ -281,7 +304,7 @@ pub fn run_create(
                 if let Some(parent) = deleted_marker.parent() {
                     fs::create_dir_all(parent)?;
                 }
-                File::create(deleted_marker)?;
+                fs::File::create(deleted_marker)?;
             }
             if opts.verbose {
                 println!("D {}", old_path);
@@ -289,7 +312,7 @@ pub fn run_create(
         }
     }
 
-    // 2. Process additions, modifications, and self-healing copies
+    // 2. Process additions and modifications
     let mut eval_ctx = EvalContext {
         baseline_map: &baseline_map,
         dest,
@@ -311,7 +334,6 @@ pub fn run_create(
         return Ok(None);
     }
 
-    // Ensure the new live baseline snapshot name is distinct and ordered after archive_snap_name
     let live_snap_name = if had_prior_state && raw_now_name <= archive_snap_name {
         let next_base =
             chrono::NaiveDateTime::parse_from_str(&archive_snap_name, "%Y-%m-%d_%H%M%S")
@@ -368,6 +390,531 @@ pub fn run_create(
             state: new_state,
         };
         Ok(Some(dry_manifest))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Flat Single-Directory Mode Implementation
+// ---------------------------------------------------------------------------
+
+fn run_create_flat(
+    opts: &SyncOptions,
+    sources: &[PathBuf],
+    dest: &Path,
+) -> io::Result<Option<SnapshotManifest>> {
+    let mappings = build_mappings(sources, true);
+    let _lock = if !opts.dry_run {
+        Some(acquire_flat_lock(dest)?)
+    } else {
+        None
+    };
+
+    let prior_flat_manifest = load_flat_manifest(dest);
+    let mut version_counters = prior_flat_manifest
+        .as_ref()
+        .map(|f| f.version_counters.clone())
+        .unwrap_or_default();
+
+    let mut baseline_map: BTreeMap<String, FileState> = BTreeMap::new();
+    if let Some(ref flat_manifest) = prior_flat_manifest {
+        for state in &flat_manifest.baseline.state {
+            if is_safe_relative_path(&state.path) {
+                baseline_map.insert(state.path.clone(), state.clone());
+            }
+        }
+    } else if dest.exists() {
+        // Initial flat scan of destination
+        for entry in fs::read_dir(dest)?.flatten() {
+            if let Ok(file_type) = entry.file_type() {
+                if file_type.is_file() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if is_reserved_flat_name(&name) {
+                        continue;
+                    }
+                    if let Ok((size, mtime_ns, _)) = get_file_metadata(&entry.path()) {
+                        let (mode, readonly) = if opts.preserve_permissions {
+                            get_file_permissions(&entry.path())
+                        } else {
+                            (None, None)
+                        };
+                        baseline_map.insert(
+                            name.clone(),
+                            FileState {
+                                path: name.clone(),
+                                stored_name: Some(name.clone()),
+                                archive_name: None,
+                                size,
+                                mtime_ns,
+                                crc32: compute_file_crc32(&entry.path()).ok(),
+                                mode,
+                                readonly,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    let had_prior_state = prior_flat_manifest.is_some() || !baseline_map.is_empty();
+
+    // Collect all existing files on disk in dest/ to avoid accidental collision
+    let mut existing_on_disk: HashSet<String> = HashSet::new();
+    if dest.exists() {
+        if let Ok(entries) = fs::read_dir(dest) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                existing_on_disk.insert(name);
+            }
+        }
+    }
+
+    // Set of stored names assigned in this active run
+    let mut allocated_stored_names: HashSet<String> = HashSet::new();
+    // Pre-seed with existing baseline stored names so we know which are active
+    for st in baseline_map.values() {
+        if let Some(ref sn) = st.stored_name {
+            allocated_stored_names.insert(sn.clone());
+        }
+    }
+
+    let mut current_source_paths: HashSet<String> = HashSet::new();
+    let mut discovered_files: Vec<(DiscoveredFile, String)> = Vec::new(); // (DF, stored_name)
+
+    for m in &mappings {
+        let src_root = Path::new(&m.source_path);
+        if !src_root.exists() {
+            eprintln!("Warning: source path missing: {}", m.source_path);
+            continue;
+        }
+
+        if src_root.is_file() {
+            let file_name = src_root
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "file".to_string());
+            let rel_str = if m.destination_prefix.is_empty() {
+                sanitize_segment(&file_name)
+            } else {
+                format!("{}/{}", m.destination_prefix, sanitize_segment(&file_name))
+            };
+
+            if !is_safe_relative_path(&rel_str) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("Invalid relative destination path: {}", rel_str),
+                ));
+            }
+            if !current_source_paths.insert(rel_str.clone()) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("Duplicate source path in scan: '{}'", rel_str),
+                ));
+            }
+
+            let stored_name = match baseline_map
+                .get(&rel_str)
+                .and_then(|b| b.stored_name.clone())
+            {
+                Some(existing) => existing,
+                None => allocate_flat_stored_name(
+                    &file_name,
+                    &allocated_stored_names,
+                    &existing_on_disk,
+                ),
+            };
+            allocated_stored_names.insert(stored_name.clone());
+
+            if let Ok((size, mtime_ns, _)) = get_file_metadata(src_root) {
+                let crc32 = compute_file_crc32(src_root).ok();
+                let (mode, readonly) = if opts.preserve_permissions {
+                    get_file_permissions(src_root)
+                } else {
+                    (None, None)
+                };
+                discovered_files.push((
+                    DiscoveredFile {
+                        src_path: src_root.to_path_buf(),
+                        rel_str,
+                        size,
+                        mtime_ns,
+                        crc32,
+                        mode,
+                        readonly,
+                    },
+                    stored_name,
+                ));
+            }
+            continue;
+        }
+
+        for entry in WalkDir::new(src_root).min_depth(1).into_iter().flatten() {
+            let path = entry.path();
+            if entry.file_type().is_file() {
+                if let Ok(rel) = path.strip_prefix(src_root) {
+                    let sanitized_rel = rel
+                        .components()
+                        .filter_map(|c| match c {
+                            std::path::Component::Normal(s) => {
+                                Some(sanitize_segment(&s.to_string_lossy()))
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("/");
+
+                    let rel_str = if m.destination_prefix.is_empty() {
+                        sanitized_rel
+                    } else {
+                        format!("{}/{}", m.destination_prefix, sanitized_rel)
+                    };
+
+                    if !is_safe_relative_path(&rel_str) {
+                        continue;
+                    }
+                    if !current_source_paths.insert(rel_str.clone()) {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!("Duplicate source path in scan: '{}'", rel_str),
+                        ));
+                    }
+
+                    let file_name = path
+                        .file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "file".to_string());
+
+                    let stored_name = match baseline_map
+                        .get(&rel_str)
+                        .and_then(|b| b.stored_name.clone())
+                    {
+                        Some(existing) => existing,
+                        None => allocate_flat_stored_name(
+                            &file_name,
+                            &allocated_stored_names,
+                            &existing_on_disk,
+                        ),
+                    };
+                    allocated_stored_names.insert(stored_name.clone());
+
+                    if let Ok((size, mtime_ns, _)) = get_file_metadata(path) {
+                        let crc32 = compute_file_crc32(path).ok();
+                        let (mode, readonly) = if opts.preserve_permissions {
+                            get_file_permissions(path)
+                        } else {
+                            (None, None)
+                        };
+                        discovered_files.push((
+                            DiscoveredFile {
+                                src_path: path.to_path_buf(),
+                                rel_str,
+                                size,
+                                mtime_ns,
+                                crc32,
+                                mode,
+                                readonly,
+                            },
+                            stored_name,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    let now_utc = Utc::now();
+    let now_local = Local::now();
+    let raw_now_name = now_local.format("%Y-%m-%d_%H%M%S").to_string();
+
+    let prior_snap_name = prior_flat_manifest
+        .as_ref()
+        .map(|f| f.baseline.snapshot_name.clone())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| raw_now_name.clone());
+
+    let archive_snap_name = prior_snap_name;
+    let pid = process::id();
+
+    let mut changes: Vec<FileChange> = Vec::new();
+    let mut summary = RunSummary::default();
+
+    // Displaced states to archive for the previous baseline snapshot
+    let mut archived_states = baseline_map.clone();
+
+    // 1. Process deletions
+    for (old_path, old_state) in &baseline_map {
+        if !current_source_paths.contains(old_path) {
+            changes.push(FileChange {
+                path: old_path.clone(),
+                action: "deleted".to_string(),
+                prior_size: Some(old_state.size),
+                prior_mtime_ns: Some(old_state.mtime_ns),
+                new_size: None,
+                new_mtime_ns: None,
+            });
+            summary.files_deleted += 1;
+
+            let stored = old_state
+                .stored_name
+                .as_deref()
+                .unwrap_or(old_path.as_str());
+
+            let (ver_name, next_ctr) =
+                allocate_version_name(stored, &version_counters, &existing_on_disk);
+            version_counters.insert(stored.to_string(), next_ctr);
+            existing_on_disk.insert(ver_name.clone());
+
+            if let Some(arch_st) = archived_states.get_mut(old_path) {
+                arch_st.archive_name = Some(ver_name.clone());
+            }
+
+            if !opts.dry_run {
+                let live_file = dest.join(stored);
+                if live_file.is_file() {
+                    let hist_file = dest.join(&ver_name);
+                    fs::rename(&live_file, &hist_file)?;
+                }
+            }
+            if opts.verbose {
+                println!("D {} (archived as {})", old_path, ver_name);
+            }
+        }
+    }
+
+    // 2. Process additions, modifications, and untouched files
+    let mut new_state: Vec<FileState> = Vec::new();
+
+    for (df, stored_name) in &discovered_files {
+        let dest_file = dest.join(stored_name);
+        let dest_exists = dest_file.is_file();
+
+        match baseline_map.get(&df.rel_str) {
+            None => {
+                // New file
+                changes.push(FileChange {
+                    path: df.rel_str.clone(),
+                    action: "new".to_string(),
+                    prior_size: None,
+                    prior_mtime_ns: None,
+                    new_size: Some(df.size),
+                    new_mtime_ns: Some(df.mtime_ns),
+                });
+                summary.files_copied += 1;
+                if !opts.dry_run {
+                    let counter = COPY_COUNTER.fetch_add(1, Ordering::Relaxed);
+                    let copied = copy_atomic(&df.src_path, &dest_file, pid, counter)?;
+                    summary.bytes_transferred += copied;
+                    existing_on_disk.insert(stored_name.clone());
+                }
+                if opts.verbose {
+                    println!("A {} -> {}", df.rel_str, stored_name);
+                }
+            }
+            Some(base) => {
+                let is_content_modified = base.size != df.size
+                    || base.mtime_ns != df.mtime_ns
+                    || (base.crc32.is_some() && df.crc32.is_some() && base.crc32 != df.crc32);
+                let is_perms_modified = opts.preserve_permissions
+                    && (base.mode != df.mode || base.readonly != df.readonly);
+
+                if is_content_modified {
+                    changes.push(FileChange {
+                        path: df.rel_str.clone(),
+                        action: "modified".to_string(),
+                        prior_size: Some(base.size),
+                        prior_mtime_ns: Some(base.mtime_ns),
+                        new_size: Some(df.size),
+                        new_mtime_ns: Some(df.mtime_ns),
+                    });
+                    summary.files_modified += 1;
+
+                    let (ver_name, next_ctr) =
+                        allocate_version_name(stored_name, &version_counters, &existing_on_disk);
+                    version_counters.insert(stored_name.to_string(), next_ctr);
+                    existing_on_disk.insert(ver_name.clone());
+
+                    if let Some(arch_st) = archived_states.get_mut(&df.rel_str) {
+                        arch_st.archive_name = Some(ver_name.clone());
+                    }
+
+                    if !opts.dry_run {
+                        if dest_exists {
+                            let hist_file = dest.join(&ver_name);
+                            fs::rename(&dest_file, &hist_file)?;
+                        }
+                        let counter = COPY_COUNTER.fetch_add(1, Ordering::Relaxed);
+                        let copied = copy_atomic(&df.src_path, &dest_file, pid, counter)?;
+                        summary.bytes_transferred += copied;
+                    }
+                    if opts.verbose {
+                        println!("M {} -> {} (v{})", df.rel_str, stored_name, ver_name);
+                    }
+                } else if !dest_exists {
+                    // Restored missing
+                    changes.push(FileChange {
+                        path: df.rel_str.clone(),
+                        action: "restored_missing".to_string(),
+                        prior_size: Some(base.size),
+                        prior_mtime_ns: Some(base.mtime_ns),
+                        new_size: Some(df.size),
+                        new_mtime_ns: Some(df.mtime_ns),
+                    });
+                    summary.files_copied += 1;
+                    if !opts.dry_run {
+                        let counter = COPY_COUNTER.fetch_add(1, Ordering::Relaxed);
+                        let copied = copy_atomic(&df.src_path, &dest_file, pid, counter)?;
+                        summary.bytes_transferred += copied;
+                        existing_on_disk.insert(stored_name.clone());
+                    }
+                    if opts.verbose {
+                        println!("+ {} -> {}", df.rel_str, stored_name);
+                    }
+                } else if is_perms_modified {
+                    changes.push(FileChange {
+                        path: df.rel_str.clone(),
+                        action: "permissions".to_string(),
+                        prior_size: Some(base.size),
+                        prior_mtime_ns: Some(base.mtime_ns),
+                        new_size: Some(df.size),
+                        new_mtime_ns: Some(df.mtime_ns),
+                    });
+                    summary.files_modified += 1;
+                    if opts.verbose {
+                        println!("P {} -> {}", df.rel_str, stored_name);
+                    }
+                }
+            }
+        }
+
+        new_state.push(FileState {
+            path: df.rel_str.clone(),
+            stored_name: Some(stored_name.clone()),
+            archive_name: None,
+            size: df.size,
+            mtime_ns: df.mtime_ns,
+            crc32: df.crc32,
+            mode: df.mode,
+            readonly: df.readonly,
+        });
+    }
+
+    if changes.is_empty() {
+        if opts.verbose {
+            println!("No changes detected. Flat backup is up-to-date.");
+        }
+        return Ok(None);
+    }
+
+    let live_snap_name = if had_prior_state && raw_now_name <= archive_snap_name {
+        let next_base =
+            chrono::NaiveDateTime::parse_from_str(&archive_snap_name, "%Y-%m-%d_%H%M%S")
+                .map(|dt| {
+                    (dt + chrono::Duration::seconds(1))
+                        .format("%Y-%m-%d_%H%M%S")
+                        .to_string()
+                })
+                .unwrap_or_else(|_| raw_now_name.clone());
+        next_base
+    } else {
+        raw_now_name
+    };
+
+    let new_baseline = SnapshotManifest {
+        version: 2,
+        snapshot_name: live_snap_name.clone(),
+        snapshot_timestamp: now_utc,
+        sources: mappings.clone(),
+        summary: summary.clone(),
+        changes: changes.clone(),
+        state: new_state,
+    };
+
+    if !opts.dry_run {
+        let mut snapshots = prior_flat_manifest
+            .as_ref()
+            .map(|f| f.snapshots.clone())
+            .unwrap_or_default();
+
+        if had_prior_state {
+            let archived_manifest = match prior_flat_manifest.as_ref() {
+                Some(f) => {
+                    let mut pm = f.baseline.clone();
+                    pm.snapshot_name = archive_snap_name;
+                    pm.state = archived_states.into_values().collect();
+                    pm
+                }
+                None => SnapshotManifest {
+                    version: 2,
+                    snapshot_name: archive_snap_name,
+                    snapshot_timestamp: now_utc,
+                    sources: mappings.clone(),
+                    summary: RunSummary::default(),
+                    changes: Vec::new(),
+                    state: archived_states.into_values().collect(),
+                },
+            };
+            snapshots.push(archived_manifest);
+        }
+
+        let updated_flat_manifest = FlatManifest {
+            version: 2,
+            flatten: true,
+            version_counters,
+            baseline: new_baseline.clone(),
+            snapshots,
+        };
+
+        save_flat_manifest(dest, &updated_flat_manifest)?;
+    }
+
+    Ok(Some(new_baseline))
+}
+
+fn allocate_flat_stored_name(
+    file_name: &str,
+    allocated_stored_names: &HashSet<String>,
+    existing_on_disk: &HashSet<String>,
+) -> String {
+    let sanitized = sanitize_segment(file_name);
+    let (stem, ext) = split_stem_ext(&sanitized);
+
+    // 1. Try exact name if not reserved and unused
+    if !is_reserved_flat_name(&sanitized)
+        && !allocated_stored_names.contains(&sanitized)
+        && !existing_on_disk.contains(&sanitized)
+    {
+        return sanitized;
+    }
+
+    // 2. Try stem_2.ext, stem_3.ext, ...
+    let mut k = 2usize;
+    loop {
+        let candidate = format!("{}_{}{}", stem, k, ext);
+        if !is_reserved_flat_name(&candidate)
+            && !allocated_stored_names.contains(&candidate)
+            && !existing_on_disk.contains(&candidate)
+        {
+            return candidate;
+        }
+        k += 1;
+    }
+}
+
+fn allocate_version_name(
+    stored_name: &str,
+    version_counters: &BTreeMap<String, u64>,
+    existing_on_disk: &HashSet<String>,
+) -> (String, u64) {
+    let (stem, ext) = split_stem_ext(stored_name);
+    let start_ctr = version_counters.get(stored_name).copied().unwrap_or(0) + 1;
+    let mut ctr = start_ctr;
+
+    loop {
+        let candidate = format!("{}.v{}{}", stem, ctr, ext);
+        if !existing_on_disk.contains(&candidate) {
+            return (candidate, ctr);
+        }
+        ctr += 1;
     }
 }
 

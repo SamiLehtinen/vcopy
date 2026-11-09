@@ -417,3 +417,117 @@ fn test_manifest_path_traversal_ignored() {
     assert!(victim.is_file());
     assert_eq!(fs::read_to_string(&victim).unwrap(), "untouchable");
 }
+
+#[test]
+fn test_flatten_collisions_versioning_and_restore() {
+    let base = std::env::temp_dir().join(format!(
+        "vcopy_test_flat_full_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos()
+    ));
+    let _ = fs::remove_dir_all(&base);
+
+    let src1 = base.join("dir1");
+    let src2 = base.join("dir2");
+    let dst = base.join("dst");
+    let restore_out = base.join("restored");
+
+    fs::create_dir_all(src1.join("sub")).unwrap();
+    fs::create_dir_all(&src2).unwrap();
+    fs::create_dir_all(&dst).unwrap();
+
+    // Create overlapping filenames across directories
+    fs::write(src1.join("sub").join("notes.txt"), b"dir1 sub notes v1").unwrap();
+    fs::write(src2.join("notes.txt"), b"dir2 notes v1").unwrap();
+    fs::write(src1.join("unique.txt"), b"unique file v1").unwrap();
+
+    // 1. Initial backup with --flatten
+    let st = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--flatten")
+        .arg(&src1)
+        .arg(&src2)
+        .arg(&dst)
+        .status()
+        .unwrap();
+    assert!(st.success());
+
+    // Both files must exist in flat dst without collision!
+    assert!(dst.join("notes.txt").is_file());
+    assert!(dst.join("notes_2.txt").is_file());
+    assert!(dst.join("unique.txt").is_file());
+    assert!(dst.join(".vcopy.json").is_file());
+    assert!(!dst.join(".version-history").exists());
+
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
+    // 2. Modify notes in dir1 and delete unique.txt in dir1
+    fs::write(src1.join("sub").join("notes.txt"), b"dir1 sub notes v2").unwrap();
+    fs::remove_file(src1.join("unique.txt")).unwrap();
+
+    let st = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&src1)
+        .arg(&src2)
+        .arg(&dst)
+        .status()
+        .unwrap();
+    assert!(st.success());
+
+    // Modified version should be archived as .v1 file in the flat root
+    let notes_v1_exists =
+        dst.join("notes.v1.txt").is_file() || dst.join("notes_2.v1.txt").is_file();
+    assert!(notes_v1_exists);
+    assert!(dst.join("unique.v1.txt").is_file());
+    assert!(!dst.join("unique.txt").exists());
+
+    // 3. Restore latest: should reconstruct original directory tree
+    let st = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("restore")
+        .arg(&dst)
+        .arg(&restore_out)
+        .status()
+        .unwrap();
+    assert!(st.success());
+
+    assert_eq!(
+        fs::read(restore_out.join("dir1").join("sub").join("notes.txt")).unwrap(),
+        b"dir1 sub notes v2"
+    );
+    assert_eq!(
+        fs::read(restore_out.join("dir2").join("notes.txt")).unwrap(),
+        b"dir2 notes v1"
+    );
+    assert!(!restore_out.join("dir1").join("unique.txt").exists());
+
+    // 4. Restore point-in-time from initial snapshot
+    let flat_content = fs::read_to_string(dst.join(".vcopy.json")).unwrap();
+    let flat_json: serde_json::Value = serde_json::from_str(&flat_content).unwrap();
+    let first_snap_name = flat_json["snapshots"][0]["snapshot_name"].as_str().unwrap();
+
+    let restore_v1_out = base.join("restored_v1");
+    let st = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("restore")
+        .arg("--target-time")
+        .arg(first_snap_name)
+        .arg(&dst)
+        .arg(&restore_v1_out)
+        .status()
+        .unwrap();
+    assert!(st.success());
+
+    assert_eq!(
+        fs::read(restore_v1_out.join("dir1").join("sub").join("notes.txt")).unwrap(),
+        b"dir1 sub notes v1"
+    );
+    assert_eq!(
+        fs::read(restore_v1_out.join("dir2").join("notes.txt")).unwrap(),
+        b"dir2 notes v1"
+    );
+    assert_eq!(
+        fs::read(restore_v1_out.join("dir1").join("unique.txt")).unwrap(),
+        b"unique file v1"
+    );
+
+    let _ = fs::remove_dir_all(&base);
+}

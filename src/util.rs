@@ -42,7 +42,14 @@ pub fn is_safe_relative_path(rel_str: &str) -> bool {
         match comp {
             Component::Normal(seg) => {
                 let s = seg.to_string_lossy();
-                if s.is_empty() || s == "." || s == ".." || s == ".version-history" {
+                if s.is_empty()
+                    || s == "."
+                    || s == ".."
+                    || s == ".version-history"
+                    || s == ".vcopy.json"
+                    || s == ".vcopy.lock"
+                    || s == ".vcopy.pid_lock"
+                {
                     return false;
                 }
                 has_normal = true;
@@ -51,6 +58,26 @@ pub fn is_safe_relative_path(rel_str: &str) -> bool {
         }
     }
     has_normal
+}
+
+pub fn split_stem_ext(filename: &str) -> (&str, &str) {
+    if filename.starts_with('.') && !filename[1..].contains('.') {
+        // e.g. ".bashrc" -> stem=".bashrc", ext=""
+        return (filename, "");
+    }
+    match filename.rfind('.') {
+        Some(idx) if idx > 0 => (&filename[..idx], &filename[idx..]),
+        _ => (filename, ""),
+    }
+}
+
+pub fn is_reserved_flat_name(name: &str) -> bool {
+    name == ".vcopy.json"
+        || name == ".vcopy.lock"
+        || name == ".vcopy.pid_lock"
+        || name.starts_with(".vcopy.")
+        || name.starts_with(".tmp.")
+        || name.contains(".tmp.")
 }
 
 pub fn resolve_clean_path(path: &Path) -> io::Result<PathBuf> {
@@ -440,7 +467,7 @@ pub fn build_mappings(sources: &[PathBuf], flatten: bool) -> Vec<SourceMapping> 
     let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
 
     for src in sources {
-        let base_name = if flatten || src.is_file() {
+        let base_name = if src.is_file() {
             "".to_string()
         } else {
             let orig = src
@@ -451,6 +478,8 @@ pub fn build_mappings(sources: &[PathBuf], flatten: bool) -> Vec<SourceMapping> 
             *count += 1;
             if *count > 1 {
                 format!("{}_{}", orig, count)
+            } else if sources.len() == 1 {
+                "".to_string()
             } else {
                 orig
             }

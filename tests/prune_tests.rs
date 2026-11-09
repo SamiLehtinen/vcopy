@@ -238,3 +238,81 @@ fn test_prune_ignores_non_snapshot_dirs_and_symlinks() {
     assert!(custom_dir.join("keep.txt").is_file());
     assert!(external_dir.join("do_not_delete.txt").is_file());
 }
+
+#[test]
+fn test_flat_pruning_and_consolidation() {
+    let ctx = TestContext::new("flat_prune");
+    ctx.write_src_file("doc.txt", b"v1 content");
+
+    // Run 1 (creates baseline with doc v1)
+    let st = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--flatten")
+        .arg("create")
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st.success());
+
+    std::thread::sleep(std::time::Duration::from_millis(1050));
+
+    // Run 2 (Archives S1=v1, live becomes v2)
+    ctx.write_src_file("doc.txt", b"v2 content");
+    let st = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("create")
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st.success());
+
+    std::thread::sleep(std::time::Duration::from_millis(1050));
+
+    // Run 3 (Archives S2=v2, live becomes v3)
+    ctx.write_src_file("doc.txt", b"v3 content");
+    let st = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("create")
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st.success());
+
+    let flat_manifest_path = ctx.dst.join(".vcopy.json");
+    let flat_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&flat_manifest_path).unwrap()).unwrap();
+    assert_eq!(flat_json["snapshots"].as_array().unwrap().len(), 2);
+
+    // Prune keeping only the latest 1 snapshot (-n 1)
+    let st = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("prune")
+        .arg("-n")
+        .arg("1")
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st.success());
+
+    let flat_json_after: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&flat_manifest_path).unwrap()).unwrap();
+    assert_eq!(flat_json_after["snapshots"].as_array().unwrap().len(), 1);
+
+    // Surviving snapshot must restore successfully
+    let restore_out = ctx.dir.join("restored_surviving");
+    let surviving_snap_name = flat_json_after["snapshots"][0]["snapshot_name"]
+        .as_str()
+        .unwrap();
+    let st = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("restore")
+        .arg("--target-time")
+        .arg(surviving_snap_name)
+        .arg(&ctx.dst)
+        .arg(&restore_out)
+        .status()
+        .unwrap();
+    assert!(st.success());
+    assert_eq!(
+        fs::read(restore_out.join("doc.txt")).unwrap(),
+        b"v2 content"
+    );
+}

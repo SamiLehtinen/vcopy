@@ -264,6 +264,37 @@ fn execute() -> Result<(), String> {
 }
 
 fn run_list(dest: &Path) -> Result<(), String> {
+    if history::is_flat_repo(dest) {
+        if let Some(flat) = history::load_flat_manifest(dest) {
+            println!(
+                "{:<26} {:<10} {:<10} {:<10} {:<15}",
+                "Snapshot (flat)", "Copied", "Modified", "Deleted", "Transferred"
+            );
+            println!("{}", "-".repeat(75));
+
+            for s in &flat.snapshots {
+                println!(
+                    "{:<26} {:<10} {:<10} {:<10} {:<15}",
+                    s.snapshot_name,
+                    s.summary.files_copied,
+                    s.summary.files_modified,
+                    s.summary.files_deleted,
+                    format!("{} bytes", s.summary.bytes_transferred)
+                );
+            }
+
+            println!(
+                "{:<26} {:<10} {:<10} {:<10} {:<15}",
+                format!("{} (live)", flat.baseline.snapshot_name),
+                flat.baseline.summary.files_copied,
+                flat.baseline.summary.files_modified,
+                flat.baseline.summary.files_deleted,
+                format!("{} bytes", flat.baseline.summary.bytes_transferred)
+            );
+            return Ok(());
+        }
+    }
+
     let snapshots = list_snapshots(dest).map_err(|e| e.to_string())?;
     let baseline = history::load_baseline(dest);
     if snapshots.is_empty() && baseline.is_none() {

@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct SourceMapping {
@@ -10,6 +11,10 @@ pub struct SourceMapping {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct FileState {
     pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stored_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archive_name: Option<String>,
     pub size: u64,
     pub mtime_ns: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -48,4 +53,15 @@ pub struct SnapshotManifest {
     pub summary: RunSummary,
     pub changes: Vec<FileChange>,
     pub state: Vec<FileState>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct FlatManifest {
+    pub version: u32,
+    pub flatten: bool,
+    #[serde(default)]
+    pub version_counters: BTreeMap<String, u64>,
+    pub baseline: SnapshotManifest,
+    #[serde(default)]
+    pub snapshots: Vec<SnapshotManifest>,
 }
