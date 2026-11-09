@@ -12,8 +12,8 @@ use crate::history::{
 use crate::models::{FileState, FlatManifest};
 use crate::util::{
     apply_file_permissions, compute_file_crc32, copy_atomic, get_file_metadata,
-    is_reserved_flat_name, is_safe_relative_path, mtime_ns_to_system_time, set_file_mtime,
-    validate_restore_paths,
+    is_reserved_flat_name, is_safe_flat_filename, is_safe_relative_path, mtime_ns_to_system_time,
+    set_file_mtime, validate_restore_paths,
 };
 
 static RESTORE_COPY_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -290,33 +290,41 @@ fn restore_flat_manifest(
 
         if let Some(idx) = snap_idx {
             // Point in time restore:
-            // 1. Check chronologically forward from snap_idx for first archive_name
+            // 1. Check chronologically forward from snap_idx for the FIRST archive_name
+            let mut was_displaced = false;
             for s in &flat_manifest.snapshots[idx..] {
                 if let Some(st) = s.state.iter().find(|st| st.path == state.path) {
                     if let Some(ref arch_name) = st.archive_name {
-                        let candidate = dest.join(arch_name);
-                        if candidate.is_file() {
-                            source_file = Some(candidate);
-                            break;
+                        was_displaced = true;
+                        if is_safe_flat_filename(arch_name) {
+                            let candidate = dest.join(arch_name);
+                            if file_matches_state(&candidate, state) {
+                                source_file = Some(candidate);
+                            }
                         }
+                        break;
                     }
                 }
             }
 
             // 2. If never displaced in subsequent snapshots, check live file
-            if source_file.is_none() {
+            if !was_displaced && source_file.is_none() {
                 let live_name = state.stored_name.as_deref().unwrap_or(state.path.as_str());
-                let live_cand = dest.join(live_name);
-                if live_cand.is_file() {
-                    source_file = Some(live_cand);
+                if is_safe_flat_filename(live_name) {
+                    let live_cand = dest.join(live_name);
+                    if file_matches_state(&live_cand, state) {
+                        source_file = Some(live_cand);
+                    }
                 }
             }
         } else {
             // Latest restore
             let live_name = state.stored_name.as_deref().unwrap_or(state.path.as_str());
-            let live_cand = dest.join(live_name);
-            if live_cand.is_file() {
-                source_file = Some(live_cand);
+            if is_safe_flat_filename(live_name) {
+                let live_cand = dest.join(live_name);
+                if file_matches_state(&live_cand, state) {
+                    source_file = Some(live_cand);
+                }
             }
         }
 
@@ -366,6 +374,20 @@ fn restore_flat_manifest(
     Ok(())
 }
 
+fn file_matches_state(path: &Path, state: &FileState) -> bool {
+    let Ok(meta) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    if !meta.file_type().is_file() || meta.len() != state.size {
+        return false;
+    }
+    if let Some(expected_crc) = state.crc32 {
+        compute_file_crc32(path).ok() == Some(expected_crc)
+    } else {
+        true
+    }
+}
+
 fn scan_recover_file(
     dest: &Path,
     expected_size: u64,
@@ -373,10 +395,13 @@ fn scan_recover_file(
 ) -> Option<PathBuf> {
     let entries = fs::read_dir(dest).ok()?;
     for entry in entries.flatten() {
-        let p = entry.path();
-        if p.is_file() {
+        let Ok(ft) = entry.file_type() else {
+            continue;
+        };
+        if ft.is_file() {
+            let p = entry.path();
             let name = p.file_name()?.to_string_lossy();
-            if is_reserved_flat_name(&name) {
+            if is_reserved_flat_name(&name) || !is_safe_flat_filename(&name) {
                 continue;
             }
             if let Ok(meta) = p.metadata() {

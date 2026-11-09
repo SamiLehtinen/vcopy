@@ -529,5 +529,30 @@ fn test_flatten_collisions_versioning_and_restore() {
         b"unique file v1"
     );
 
+    // 5. Test scan-recovery when .v1 file is manually renamed in flat destination
+    // Even with live notes.txt (v2) present on disk, restoring snapshot 1 must NOT
+    // grab live notes.txt (v2), and must instead scan-recover the renamed v1 file!
+    let renamed_v1 = dst.join("manually_renamed_old_notes.bak");
+    if dst.join("notes.v1.txt").is_file() {
+        fs::rename(dst.join("notes.v1.txt"), &renamed_v1).unwrap();
+    } else {
+        fs::rename(dst.join("notes_2.v1.txt"), &renamed_v1).unwrap();
+    }
+
+    let restore_scan_out = base.join("restored_scan_recovery");
+    let st = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("restore")
+        .arg("--target-time")
+        .arg(first_snap_name)
+        .arg(&dst)
+        .arg(&restore_scan_out)
+        .status()
+        .unwrap();
+    assert!(st.success());
+    assert_eq!(
+        fs::read(restore_scan_out.join("dir1").join("sub").join("notes.txt")).unwrap(),
+        b"dir1 sub notes v1"
+    );
+
     let _ = fs::remove_dir_all(&base);
 }

@@ -14,7 +14,10 @@ use crate::history::{
 };
 use crate::lock::{acquire_flat_lock, acquire_lock};
 use crate::models::SnapshotManifest;
-use crate::util::{copy_atomic, is_safe_relative_path, normalize_rel_path, validate_dest_path};
+use crate::util::{
+    copy_atomic, is_safe_flat_filename, is_safe_relative_path, normalize_rel_path,
+    validate_dest_path,
+};
 
 static PRUNE_COPY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -341,9 +344,10 @@ fn run_prune_flat(opts: &PruneOptions, dest: &Path) -> io::Result<()> {
         for p_snap in &pruned_snapshots {
             for p_state in &p_snap.state {
                 if let Some(ref arch_name) = p_state.archive_name {
-                    if !active_archive_files.contains(arch_name) {
+                    if is_safe_flat_filename(arch_name) && !active_archive_files.contains(arch_name)
+                    {
                         let fpath = dest.join(arch_name);
-                        if fpath.is_file() {
+                        if fs::symlink_metadata(&fpath).is_ok_and(|m| m.file_type().is_file()) {
                             let _ = fs::remove_file(fpath);
                             if opts.verbose {
                                 println!("Removed unreferenced version file: {}", arch_name);

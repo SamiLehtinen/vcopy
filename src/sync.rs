@@ -16,8 +16,8 @@ use crate::lock::{acquire_flat_lock, acquire_lock};
 use crate::models::{FileChange, FileState, FlatManifest, RunSummary, SnapshotManifest};
 use crate::util::{
     build_mappings, cleanup_empty_parents, compute_file_crc32, copy_atomic, get_file_metadata,
-    get_file_permissions, is_reserved_flat_name, is_safe_relative_path, normalize_rel_path,
-    sanitize_segment, split_stem_ext, validate_sync_paths,
+    get_file_permissions, is_reserved_flat_name, is_safe_flat_filename, is_safe_relative_path,
+    normalize_rel_path, sanitize_segment, split_stem_ext, validate_sync_paths,
 };
 
 static COPY_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -48,7 +48,20 @@ pub fn run_create(
     validate_sync_paths(sources, dest)?;
 
     // Check if destination is already a flat repo or if --flatten requested
-    let is_flat = opts.flatten || is_flat_repo(dest);
+    let flat_repo_exists = is_flat_repo(dest);
+    let std_repo_exists = dest.join(".version-history").is_dir();
+
+    if opts.flatten && std_repo_exists && !flat_repo_exists {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "Safety error: destination '{}' is already a non-flat repository (contains .version-history/). Cannot mix --flatten with standard mode.",
+                dest.display()
+            ),
+        ));
+    }
+
+    let is_flat = opts.flatten || flat_repo_exists;
     if is_flat {
         return run_create_flat(opts, sources, dest);
     }
@@ -418,7 +431,16 @@ fn run_create_flat(
     let mut baseline_map: BTreeMap<String, FileState> = BTreeMap::new();
     if let Some(ref flat_manifest) = prior_flat_manifest {
         for state in &flat_manifest.baseline.state {
-            if is_safe_relative_path(&state.path) {
+            if is_safe_relative_path(&state.path)
+                && state
+                    .stored_name
+                    .as_deref()
+                    .is_none_or(is_safe_flat_filename)
+                && state
+                    .archive_name
+                    .as_deref()
+                    .is_none_or(is_safe_flat_filename)
+            {
                 baseline_map.insert(state.path.clone(), state.clone());
             }
         }
@@ -428,7 +450,7 @@ fn run_create_flat(
             if let Ok(file_type) = entry.file_type() {
                 if file_type.is_file() {
                     let name = entry.file_name().to_string_lossy().to_string();
-                    if is_reserved_flat_name(&name) {
+                    if is_reserved_flat_name(&name) || !is_safe_flat_filename(&name) {
                         continue;
                     }
                     if let Ok((size, mtime_ns, _)) = get_file_metadata(&entry.path()) {
@@ -469,17 +491,8 @@ fn run_create_flat(
         }
     }
 
-    // Set of stored names assigned in this active run
-    let mut allocated_stored_names: HashSet<String> = HashSet::new();
-    // Pre-seed with existing baseline stored names so we know which are active
-    for st in baseline_map.values() {
-        if let Some(ref sn) = st.stored_name {
-            allocated_stored_names.insert(sn.clone());
-        }
-    }
-
     let mut current_source_paths: HashSet<String> = HashSet::new();
-    let mut discovered_files: Vec<(DiscoveredFile, String)> = Vec::new(); // (DF, stored_name)
+    let mut raw_discovered: Vec<(DiscoveredFile, String)> = Vec::new(); // (DF, file_name)
 
     for m in &mappings {
         let src_root = Path::new(&m.source_path);
@@ -512,19 +525,6 @@ fn run_create_flat(
                 ));
             }
 
-            let stored_name = match baseline_map
-                .get(&rel_str)
-                .and_then(|b| b.stored_name.clone())
-            {
-                Some(existing) => existing,
-                None => allocate_flat_stored_name(
-                    &file_name,
-                    &allocated_stored_names,
-                    &existing_on_disk,
-                ),
-            };
-            allocated_stored_names.insert(stored_name.clone());
-
             if let Ok((size, mtime_ns, _)) = get_file_metadata(src_root) {
                 let crc32 = compute_file_crc32(src_root).ok();
                 let (mode, readonly) = if opts.preserve_permissions {
@@ -532,7 +532,7 @@ fn run_create_flat(
                 } else {
                     (None, None)
                 };
-                discovered_files.push((
+                raw_discovered.push((
                     DiscoveredFile {
                         src_path: src_root.to_path_buf(),
                         rel_str,
@@ -542,7 +542,7 @@ fn run_create_flat(
                         mode,
                         readonly,
                     },
-                    stored_name,
+                    file_name,
                 ));
             }
             continue;
@@ -584,19 +584,6 @@ fn run_create_flat(
                         .map(|s| s.to_string_lossy().to_string())
                         .unwrap_or_else(|| "file".to_string());
 
-                    let stored_name = match baseline_map
-                        .get(&rel_str)
-                        .and_then(|b| b.stored_name.clone())
-                    {
-                        Some(existing) => existing,
-                        None => allocate_flat_stored_name(
-                            &file_name,
-                            &allocated_stored_names,
-                            &existing_on_disk,
-                        ),
-                    };
-                    allocated_stored_names.insert(stored_name.clone());
-
                     if let Ok((size, mtime_ns, _)) = get_file_metadata(path) {
                         let crc32 = compute_file_crc32(path).ok();
                         let (mode, readonly) = if opts.preserve_permissions {
@@ -604,7 +591,7 @@ fn run_create_flat(
                         } else {
                             (None, None)
                         };
-                        discovered_files.push((
+                        raw_discovered.push((
                             DiscoveredFile {
                                 src_path: path.to_path_buf(),
                                 rel_str,
@@ -614,10 +601,22 @@ fn run_create_flat(
                                 mode,
                                 readonly,
                             },
-                            stored_name,
+                            file_name,
                         ));
                     }
                 }
+            }
+        }
+    }
+
+    // Set of stored names assigned to active live files in this run.
+    // Pre-seed only with SURVIVING baseline stored names so deleted files release their stored_name
+    // once archived into a .v<N> file.
+    let mut allocated_stored_names: HashSet<String> = HashSet::new();
+    for (old_path, st) in &baseline_map {
+        if current_source_paths.contains(old_path) {
+            if let Some(ref sn) = st.stored_name {
+                allocated_stored_names.insert(sn.clone());
             }
         }
     }
@@ -626,13 +625,18 @@ fn run_create_flat(
     let now_local = Local::now();
     let raw_now_name = now_local.format("%Y-%m-%d_%H%M%S").to_string();
 
+    let existing_snapshots = prior_flat_manifest
+        .as_ref()
+        .map(|f| f.snapshots.as_slice())
+        .unwrap_or(&[]);
+
     let prior_snap_name = prior_flat_manifest
         .as_ref()
         .map(|f| f.baseline.snapshot_name.clone())
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| raw_now_name.clone());
 
-    let archive_snap_name = prior_snap_name;
+    let archive_snap_name = unique_flat_snapshot_name(existing_snapshots, &prior_snap_name, None);
     let pid = process::id();
 
     let mut changes: Vec<FileChange> = Vec::new();
@@ -641,7 +645,7 @@ fn run_create_flat(
     // Displaced states to archive for the previous baseline snapshot
     let mut archived_states = baseline_map.clone();
 
-    // 1. Process deletions
+    // 1. Process deletions first so their live stored_name is archived to .v<N> and freed
     for (old_path, old_state) in &baseline_map {
         if !current_source_paths.contains(old_path) {
             changes.push(FileChange {
@@ -659,9 +663,18 @@ fn run_create_flat(
                 .as_deref()
                 .unwrap_or(old_path.as_str());
 
-            let (ver_name, next_ctr) =
-                allocate_version_name(stored, &version_counters, &existing_on_disk);
+            if !is_safe_flat_filename(stored) {
+                continue;
+            }
+
+            let (ver_name, next_ctr) = allocate_version_name(
+                stored,
+                &version_counters,
+                &existing_on_disk,
+                &allocated_stored_names,
+            );
             version_counters.insert(stored.to_string(), next_ctr);
+            existing_on_disk.remove(stored);
             existing_on_disk.insert(ver_name.clone());
 
             if let Some(arch_st) = archived_states.get_mut(old_path) {
@@ -679,6 +692,24 @@ fn run_create_flat(
                 println!("D {} (archived as {})", old_path, ver_name);
             }
         }
+    }
+
+    // Allocate stored_name for discovered files now that deletions have been archived
+    let mut discovered_files: Vec<(DiscoveredFile, String)> =
+        Vec::with_capacity(raw_discovered.len());
+    for (df, file_name) in raw_discovered {
+        let stored_name = match baseline_map
+            .get(&df.rel_str)
+            .and_then(|b| b.stored_name.clone())
+            .filter(|s| is_safe_flat_filename(s))
+        {
+            Some(existing) => existing,
+            None => {
+                allocate_flat_stored_name(&file_name, &allocated_stored_names, &existing_on_disk)
+            }
+        };
+        allocated_stored_names.insert(stored_name.clone());
+        discovered_files.push((df, stored_name));
     }
 
     // 2. Process additions, modifications, and untouched files
@@ -700,11 +731,11 @@ fn run_create_flat(
                     new_mtime_ns: Some(df.mtime_ns),
                 });
                 summary.files_copied += 1;
+                existing_on_disk.insert(stored_name.clone());
                 if !opts.dry_run {
                     let counter = COPY_COUNTER.fetch_add(1, Ordering::Relaxed);
                     let copied = copy_atomic(&df.src_path, &dest_file, pid, counter)?;
                     summary.bytes_transferred += copied;
-                    existing_on_disk.insert(stored_name.clone());
                 }
                 if opts.verbose {
                     println!("A {} -> {}", df.rel_str, stored_name);
@@ -728,8 +759,12 @@ fn run_create_flat(
                     });
                     summary.files_modified += 1;
 
-                    let (ver_name, next_ctr) =
-                        allocate_version_name(stored_name, &version_counters, &existing_on_disk);
+                    let (ver_name, next_ctr) = allocate_version_name(
+                        stored_name,
+                        &version_counters,
+                        &existing_on_disk,
+                        &allocated_stored_names,
+                    );
                     version_counters.insert(stored_name.to_string(), next_ctr);
                     existing_on_disk.insert(ver_name.clone());
 
@@ -760,11 +795,11 @@ fn run_create_flat(
                         new_mtime_ns: Some(df.mtime_ns),
                     });
                     summary.files_copied += 1;
+                    existing_on_disk.insert(stored_name.clone());
                     if !opts.dry_run {
                         let counter = COPY_COUNTER.fetch_add(1, Ordering::Relaxed);
                         let copied = copy_atomic(&df.src_path, &dest_file, pid, counter)?;
                         summary.bytes_transferred += copied;
-                        existing_on_disk.insert(stored_name.clone());
                     }
                     if opts.verbose {
                         println!("+ {} -> {}", df.rel_str, stored_name);
@@ -805,19 +840,11 @@ fn run_create_flat(
         return Ok(None);
     }
 
-    let live_snap_name = if had_prior_state && raw_now_name <= archive_snap_name {
-        let next_base =
-            chrono::NaiveDateTime::parse_from_str(&archive_snap_name, "%Y-%m-%d_%H%M%S")
-                .map(|dt| {
-                    (dt + chrono::Duration::seconds(1))
-                        .format("%Y-%m-%d_%H%M%S")
-                        .to_string()
-                })
-                .unwrap_or_else(|_| raw_now_name.clone());
-        next_base
-    } else {
-        raw_now_name
-    };
+    let live_snap_name = unique_flat_snapshot_name(
+        existing_snapshots,
+        &raw_now_name,
+        had_prior_state.then_some(archive_snap_name.as_str()),
+    );
 
     let new_baseline = SnapshotManifest {
         version: 2,
@@ -870,6 +897,40 @@ fn run_create_flat(
     Ok(Some(new_baseline))
 }
 
+fn unique_flat_snapshot_name(
+    existing_snapshots: &[SnapshotManifest],
+    preferred_name: &str,
+    must_be_after: Option<&str>,
+) -> String {
+    let mut base_name = preferred_name.to_string();
+    if let Some(after) = must_be_after {
+        if base_name.as_str() <= after {
+            base_name = after.to_string();
+        }
+    }
+    for s in existing_snapshots {
+        if base_name.as_str() < s.snapshot_name.as_str() {
+            base_name = s.snapshot_name.clone();
+        }
+    }
+
+    let base_dt = chrono::NaiveDateTime::parse_from_str(&base_name, "%Y-%m-%d_%H%M%S")
+        .unwrap_or_else(|_| Local::now().naive_local());
+
+    let mut candidate_dt = base_dt;
+    loop {
+        let candidate = candidate_dt.format("%Y-%m-%d_%H%M%S").to_string();
+        let after_ok = must_be_after.is_none_or(|after| candidate.as_str() > after);
+        let unique_ok = existing_snapshots
+            .iter()
+            .all(|s| s.snapshot_name != candidate);
+        if after_ok && unique_ok {
+            return candidate;
+        }
+        candidate_dt += chrono::Duration::seconds(1);
+    }
+}
+
 fn allocate_flat_stored_name(
     file_name: &str,
     allocated_stored_names: &HashSet<String>,
@@ -904,6 +965,7 @@ fn allocate_version_name(
     stored_name: &str,
     version_counters: &BTreeMap<String, u64>,
     existing_on_disk: &HashSet<String>,
+    allocated_stored_names: &HashSet<String>,
 ) -> (String, u64) {
     let (stem, ext) = split_stem_ext(stored_name);
     let start_ctr = version_counters.get(stored_name).copied().unwrap_or(0) + 1;
@@ -911,7 +973,10 @@ fn allocate_version_name(
 
     loop {
         let candidate = format!("{}.v{}{}", stem, ctr, ext);
-        if !existing_on_disk.contains(&candidate) {
+        if !is_reserved_flat_name(&candidate)
+            && !existing_on_disk.contains(&candidate)
+            && !allocated_stored_names.contains(&candidate)
+        {
             return (candidate, ctr);
         }
         ctr += 1;

@@ -80,6 +80,14 @@ pub fn is_reserved_flat_name(name: &str) -> bool {
         || name.contains(".tmp.")
 }
 
+pub fn is_safe_flat_filename(name: &str) -> bool {
+    !name.contains('/')
+        && !name.contains('\\')
+        && !is_reserved_flat_name(name)
+        && is_safe_relative_path(name)
+        && Path::new(name).components().count() == 1
+}
+
 pub fn resolve_clean_path(path: &Path) -> io::Result<PathBuf> {
     if path.as_os_str().is_empty() {
         return Err(io::Error::new(
@@ -463,12 +471,46 @@ pub fn build_mappings(sources: &[PathBuf], flatten: bool) -> Vec<SourceMapping> 
         }];
     }
 
+    // Count how many file sources share the same basename so colliding file sources
+    // (e.g. /dir1/notes.txt and /dir2/notes.txt) get disambiguated prefixes.
+    let mut file_name_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for src in sources {
+        if src.is_file() {
+            let fname = src
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "file".to_string());
+            *file_name_counts.entry(fname).or_insert(0) += 1;
+        }
+    }
+
     let mut map = Vec::new();
     let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
 
     for src in sources {
         let base_name = if src.is_file() {
-            "".to_string()
+            let fname = src
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "file".to_string());
+            if file_name_counts.get(&fname).copied().unwrap_or(0) > 1 {
+                let parent_orig = src
+                    .parent()
+                    .and_then(|p| p.file_name())
+                    .map(|s| s.to_string_lossy().to_string())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "file_src".to_string());
+                let count = counts.entry(parent_orig.clone()).or_insert(0);
+                *count += 1;
+                if *count > 1 {
+                    format!("{}_{}", parent_orig, count)
+                } else {
+                    parent_orig
+                }
+            } else {
+                "".to_string()
+            }
         } else {
             let orig = src
                 .file_name()
