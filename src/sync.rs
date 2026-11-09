@@ -33,6 +33,8 @@ struct DiscoveredFile {
     size: u64,
     mtime_ns: i64,
     crc32: Option<u32>,
+    mode: Option<u32>,
+    readonly: Option<bool>,
 }
 
 pub fn run_create(
@@ -156,6 +158,8 @@ pub fn run_create(
                     size,
                     mtime_ns,
                     crc32,
+                    mode,
+                    readonly,
                 });
             }
             continue;
@@ -216,6 +220,8 @@ pub fn run_create(
                             size,
                             mtime_ns,
                             crc32,
+                            mode,
+                            readonly,
                         });
                     }
                 }
@@ -402,11 +408,13 @@ fn eval_file(df: &DiscoveredFile, ctx: &mut EvalContext) -> io::Result<()> {
             }
         }
         Some(base) => {
-            let is_modified = base.size != df.size
+            let is_content_modified = base.size != df.size
                 || base.mtime_ns != df.mtime_ns
                 || (base.crc32.is_some() && df.crc32.is_some() && base.crc32 != df.crc32);
+            let is_perms_modified = ctx.opts.preserve_permissions
+                && (base.mode != df.mode || base.readonly != df.readonly);
 
-            if is_modified {
+            if is_content_modified {
                 ctx.changes.push(FileChange {
                     path: rel_str.to_string(),
                     action: "modified".to_string(),
@@ -451,6 +459,21 @@ fn eval_file(df: &DiscoveredFile, ctx: &mut EvalContext) -> io::Result<()> {
                 }
                 if ctx.opts.verbose {
                     println!("+ {}", rel_str);
+                }
+            } else if is_perms_modified {
+                // Only file permissions changed (or -p was newly enabled); update manifest metadata
+                // without duplicating unchanged file contents in the snapshot directory.
+                ctx.changes.push(FileChange {
+                    path: rel_str.to_string(),
+                    action: "permissions".to_string(),
+                    prior_size: Some(base.size),
+                    prior_mtime_ns: Some(base.mtime_ns),
+                    new_size: Some(df.size),
+                    new_mtime_ns: Some(df.mtime_ns),
+                });
+                ctx.summary.files_modified += 1;
+                if ctx.opts.verbose {
+                    println!("P {}", rel_str);
                 }
             }
         }

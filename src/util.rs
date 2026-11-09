@@ -294,19 +294,35 @@ pub fn apply_file_permissions(
     mode: Option<u32>,
     readonly: Option<bool>,
 ) -> std::io::Result<()> {
-    if let Some(ro) = readonly {
-        if let Ok(meta) = fs::metadata(path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Some(m) = mode {
+            let perms = fs::Permissions::from_mode(m);
+            fs::set_permissions(path, perms)?;
+        } else if let Some(ro) = readonly {
+            let meta = fs::metadata(path)?;
             let mut perms = meta.permissions();
-            perms.set_readonly(ro);
-            let _ = fs::set_permissions(path, perms);
+            let current_mode = perms.mode() & 0o7777;
+            let new_mode = if ro {
+                current_mode & !0o222
+            } else {
+                current_mode | 0o200
+            };
+            perms.set_mode(new_mode);
+            fs::set_permissions(path, perms)?;
         }
     }
 
-    #[cfg(unix)]
-    if let Some(m) = mode {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = fs::Permissions::from_mode(m);
-        let _ = fs::set_permissions(path, perms);
+    #[cfg(not(unix))]
+    {
+        let ro_target = readonly.or_else(|| mode.map(|m| (m & 0o200) == 0));
+        if let Some(ro) = ro_target {
+            let meta = fs::metadata(path)?;
+            let mut perms = meta.permissions();
+            perms.set_readonly(ro);
+            fs::set_permissions(path, perms)?;
+        }
     }
 
     Ok(())
@@ -343,7 +359,14 @@ pub fn copy_atomic(src: &Path, dst: &Path, pid: u32, counter: u64) -> std::io::R
     let tmp_name = format!(".{}.tmp.{}.{}", orig_name, pid, counter);
     let tmp_path = dst.with_file_name(tmp_name);
 
-    let bytes = match fs::copy(src, &tmp_path) {
+    // Copy contents via io::copy rather than fs::copy so that restrictive OS permissions
+    // (such as chmod 0444 or read-only flags) are not applied to the backup mirror files.
+    let copy_res = (|| -> std::io::Result<u64> {
+        let mut reader = File::open(src)?;
+        let mut writer = File::create(&tmp_path)?;
+        std::io::copy(&mut reader, &mut writer)
+    })();
+    let bytes = match copy_res {
         Ok(b) => b,
         Err(e) => {
             let _ = fs::remove_file(&tmp_path);
