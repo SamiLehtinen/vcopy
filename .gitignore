@@ -1,0 +1,7 @@
+/target
+**/*.rs.bk
+*.tmp.*
+.*.tmp.*
+.version-history/
+.lock
+.pid_lock

@@ -1,0 +1,23 @@
+[package]
+name = "vcopy"
+version = "0.1.0"
+edition = "2021"
+authors = ["Sami Lehtinen"]
+description = "Browseable, zero-link, multi-platform file sync with snapshot history"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+walkdir = "2.5"
+chrono = { version = "0.4", features = ["serde"] }
+fs2 = "0.4"
+crc32fast = "1.5.4"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
