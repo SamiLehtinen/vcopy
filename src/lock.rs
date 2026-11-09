@@ -68,6 +68,7 @@ fn is_process_alive(pid: u32) -> bool {
     }
     #[cfg(not(unix))]
     {
+        let _ = pid;
         true
     }
 }

@@ -81,8 +81,26 @@ cargo test --all-targets
 # Debug build
 cargo build
 
-# Release build
+# Release build (Native Linux x86_64)
 cargo build --release
+
+# Cross-compilation targets (using installed zig and cargo-zigbuild):
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+
+# 1. Linux ARM64 Static MUSL:
+cargo zigbuild --release --target aarch64-unknown-linux-musl
+
+# 2. Windows 64-bit (.exe):
+cargo zigbuild --release --target x86_64-pc-windows-gnullvm
+
+# 3. Windows ARM64 (.exe):
+cargo zigbuild --release --target aarch64-pc-windows-gnullvm
+
+# 4. macOS Apple Silicon (arm64):
+SDKROOT="$HOME/.local/sdk/MacOSX11.3.sdk" cargo zigbuild --release --target aarch64-apple-darwin
+
+# 5. macOS Intel (x86_64):
+SDKROOT="$HOME/.local/sdk/MacOSX11.3.sdk" cargo zigbuild --release --target x86_64-apple-darwin
 ```
 
 ---
