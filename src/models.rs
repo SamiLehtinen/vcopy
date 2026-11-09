@@ -14,6 +14,10 @@ pub struct FileState {
     pub mtime_ns: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crc32: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readonly: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]

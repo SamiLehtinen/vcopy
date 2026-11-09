@@ -77,6 +77,8 @@ pub struct FileState {
     pub size: u64,
     pub mtime_ns: i64,
     pub crc32: Option<u32>,
+    pub mode: Option<u32>,
+    pub readonly: Option<bool>,
 }
 ```
 

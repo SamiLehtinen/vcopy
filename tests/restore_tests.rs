@@ -200,3 +200,55 @@ fn test_restore_latest() {
         "hello world v2"
     );
 }
+
+#[test]
+fn test_restore_permissions_option() {
+    let ctx = TestContext::new("perms_opt");
+
+    ctx.write_src_file("script.sh", b"#!/bin/sh\necho hello\n");
+    let script_path = ctx.src.join("script.sh");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&script_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script_path, perms).unwrap();
+    }
+
+    // Backup with -p / --preserve-permissions
+    let st = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("-p")
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st.success());
+
+    // Verify baseline.json contains mode 0o755
+    let baseline_path = ctx.dst.join(".version-history").join("baseline.json");
+    let content = fs::read_to_string(baseline_path).unwrap();
+    #[cfg(unix)]
+    {
+        assert!(content.contains("\"mode\": 493")); // 0o755 in decimal is 493
+    }
+
+    // Restore with -p
+    let restore_out = ctx.dir.join("restored_perms");
+    let st = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("restore")
+        .arg("-p")
+        .arg(&ctx.dst)
+        .arg(&restore_out)
+        .status()
+        .unwrap();
+    assert!(st.success());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let restored_script = restore_out.join("script.sh");
+        let restored_mode = fs::metadata(restored_script).unwrap().permissions().mode() & 0o777;
+        assert_eq!(restored_mode, 0o755);
+    }
+}

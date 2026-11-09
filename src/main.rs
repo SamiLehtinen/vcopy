@@ -76,6 +76,10 @@ struct Cli {
     /// Target snapshot timestamp (YYYY-MM-DD_HHMMSS or prefix) or 'latest'
     #[arg(long = "target-time", value_name = "TIMESTAMP")]
     target_time: Option<String>,
+
+    /// Save and restore file permissions in snapshot metadata (default: disabled)
+    #[arg(short = 'p', long = "preserve-permissions")]
+    preserve_permissions: bool,
 }
 
 #[derive(Subcommand, Debug, PartialEq, Eq)]
@@ -136,6 +140,10 @@ enum Commands {
         #[arg(long = "target-time", value_name = "TIMESTAMP")]
         target_time: Option<String>,
 
+        /// Apply saved permissions to restored files
+        #[arg(short = 'p', long = "preserve-permissions")]
+        preserve_permissions: bool,
+
         /// Print restored file paths
         #[arg(short = 'v', long = "verbose")]
         verbose: bool,
@@ -180,6 +188,7 @@ fn execute() -> Result<(), String> {
         flatten: cli.flatten,
         dry_run: cli.dry_run,
         verbose: cli.verbose,
+        preserve_permissions: cli.preserve_permissions,
     };
 
     let prune_opts = PruneOptions {
@@ -239,6 +248,7 @@ fn execute() -> Result<(), String> {
         }
         Some(Commands::Restore {
             target_time,
+            preserve_permissions,
             verbose,
             dest,
             target_out,
@@ -246,6 +256,7 @@ fn execute() -> Result<(), String> {
             let restore_opts = RestoreOptions {
                 target_time: target_time.or(cli.target_time),
                 verbose: verbose || cli.verbose,
+                preserve_permissions: preserve_permissions || cli.preserve_permissions,
             };
             run_restore(&restore_opts, &dest, &target_out).map_err(|e| e.to_string())?;
         }

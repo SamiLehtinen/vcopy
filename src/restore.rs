@@ -8,8 +8,8 @@ use walkdir::WalkDir;
 
 use crate::history::{list_snapshots, load_baseline, load_manifest};
 use crate::util::{
-    copy_atomic, get_file_metadata, is_safe_relative_path, mtime_ns_to_system_time, set_file_mtime,
-    validate_restore_paths,
+    apply_file_permissions, copy_atomic, get_file_metadata, is_safe_relative_path,
+    mtime_ns_to_system_time, set_file_mtime, validate_restore_paths,
 };
 
 static RESTORE_COPY_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -18,6 +18,7 @@ static RESTORE_COPY_COUNTER: AtomicU64 = AtomicU64::new(0);
 pub struct RestoreOptions {
     pub target_time: Option<String>,
     pub verbose: bool,
+    pub preserve_permissions: bool,
 }
 
 pub fn run_restore(opts: &RestoreOptions, dest: &Path, target_out: &Path) -> io::Result<()> {
@@ -27,7 +28,7 @@ pub fn run_restore(opts: &RestoreOptions, dest: &Path, target_out: &Path) -> io:
     let target_time_str = opts.target_time.as_deref().unwrap_or("latest");
 
     if target_time_str == "latest" {
-        return restore_latest(dest, target_out, opts.verbose);
+        return restore_latest(dest, target_out, opts.verbose, opts.preserve_permissions);
     }
 
     let snapshots = list_snapshots(dest)?;
@@ -41,7 +42,7 @@ pub fn run_restore(opts: &RestoreOptions, dest: &Path, target_out: &Path) -> io:
             && is_newer_than_history
             && target_time_str == baseline.snapshot_name.as_str()
         {
-            return restore_latest(dest, target_out, opts.verbose);
+            return restore_latest(dest, target_out, opts.verbose, opts.preserve_permissions);
         }
     }
 
@@ -112,6 +113,9 @@ pub fn run_restore(opts: &RestoreOptions, dest: &Path, target_out: &Path) -> io:
                 let counter = RESTORE_COPY_COUNTER.fetch_add(1, Ordering::Relaxed);
                 copy_atomic(&src_file, &out_file, pid, counter)?;
                 let _ = set_file_mtime(&out_file, mtime_ns_to_system_time(state.mtime_ns));
+                if opts.preserve_permissions {
+                    let _ = apply_file_permissions(&out_file, state.mode, state.readonly);
+                }
                 restored_count += 1;
                 if opts.verbose {
                     println!("Restored: {}", state.path);
@@ -136,8 +140,21 @@ pub fn run_restore(opts: &RestoreOptions, dest: &Path, target_out: &Path) -> io:
     Ok(())
 }
 
-fn restore_latest(dest: &Path, target_out: &Path, verbose: bool) -> io::Result<()> {
+fn restore_latest(
+    dest: &Path,
+    target_out: &Path,
+    verbose: bool,
+    preserve_permissions: bool,
+) -> io::Result<()> {
     let hist_dir = dest.join(".version-history");
+    let baseline = load_baseline(dest);
+    let baseline_state_map = baseline.as_ref().map(|b| {
+        b.state
+            .iter()
+            .map(|st| (st.path.as_str(), st))
+            .collect::<std::collections::HashMap<_, _>>()
+    });
+
     let pid = process::id();
     let mut count = 0usize;
 
@@ -155,6 +172,16 @@ fn restore_latest(dest: &Path, target_out: &Path, verbose: bool) -> io::Result<(
                 if let Ok((_, _, mtime)) = get_file_metadata(path) {
                     let _ = set_file_mtime(&out_file, mtime);
                 }
+
+                if preserve_permissions {
+                    let rel_str = crate::util::normalize_rel_path(rel);
+                    if let Some(ref map) = baseline_state_map {
+                        if let Some(st) = map.get(rel_str.as_str()) {
+                            let _ = apply_file_permissions(&out_file, st.mode, st.readonly);
+                        }
+                    }
+                }
+
                 count += 1;
                 if verbose {
                     println!("Restored latest: {}", rel.display());

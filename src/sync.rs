@@ -13,7 +13,8 @@ use crate::lock::acquire_lock;
 use crate::models::{FileChange, FileState, RunSummary, SnapshotManifest};
 use crate::util::{
     build_mappings, cleanup_empty_parents, compute_file_crc32, copy_atomic, get_file_metadata,
-    is_safe_relative_path, normalize_rel_path, sanitize_segment, validate_sync_paths,
+    get_file_permissions, is_safe_relative_path, normalize_rel_path, sanitize_segment,
+    validate_sync_paths,
 };
 
 static COPY_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -23,6 +24,7 @@ pub struct SyncOptions {
     pub flatten: bool,
     pub dry_run: bool,
     pub verbose: bool,
+    pub preserve_permissions: bool,
 }
 
 struct DiscoveredFile {
@@ -71,6 +73,11 @@ pub fn run_create(
                         continue;
                     }
                     if let Ok((size, mtime_ns, _)) = get_file_metadata(path) {
+                        let (mode, readonly) = if opts.preserve_permissions {
+                            get_file_permissions(path)
+                        } else {
+                            (None, None)
+                        };
                         baseline_map.insert(
                             rel_str.clone(),
                             FileState {
@@ -78,6 +85,8 @@ pub fn run_create(
                                 size,
                                 mtime_ns,
                                 crc32: compute_file_crc32(path).ok(),
+                                mode,
+                                readonly,
                             },
                         );
                     }
@@ -128,11 +137,18 @@ pub fn run_create(
 
             if let Ok((size, mtime_ns, _)) = get_file_metadata(src_root) {
                 let crc32 = compute_file_crc32(src_root).ok();
+                let (mode, readonly) = if opts.preserve_permissions {
+                    get_file_permissions(src_root)
+                } else {
+                    (None, None)
+                };
                 new_state.push(FileState {
                     path: rel_str.clone(),
                     size,
                     mtime_ns,
                     crc32,
+                    mode,
+                    readonly,
                 });
                 discovered_files.push(DiscoveredFile {
                     src_path: src_root.to_path_buf(),
@@ -181,11 +197,18 @@ pub fn run_create(
 
                     if let Ok((size, mtime_ns, _)) = get_file_metadata(path) {
                         let crc32 = compute_file_crc32(path).ok();
+                        let (mode, readonly) = if opts.preserve_permissions {
+                            get_file_permissions(path)
+                        } else {
+                            (None, None)
+                        };
                         new_state.push(FileState {
                             path: rel_str.clone(),
                             size,
                             mtime_ns,
                             crc32,
+                            mode,
+                            readonly,
                         });
                         discovered_files.push(DiscoveredFile {
                             src_path: path.to_path_buf(),

@@ -269,6 +269,49 @@ pub fn get_file_metadata(path: &Path) -> std::io::Result<(u64, i64, SystemTime)>
     Ok((size, mtime_ns, mtime))
 }
 
+pub fn get_file_permissions(path: &Path) -> (Option<u32>, Option<bool>) {
+    let Ok(meta) = fs::metadata(path) else {
+        return (None, None);
+    };
+
+    let readonly = Some(meta.permissions().readonly());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = Some(meta.permissions().mode() & 0o7777);
+        (mode, readonly)
+    }
+
+    #[cfg(not(unix))]
+    {
+        (None, readonly)
+    }
+}
+
+pub fn apply_file_permissions(
+    path: &Path,
+    mode: Option<u32>,
+    readonly: Option<bool>,
+) -> std::io::Result<()> {
+    if let Some(ro) = readonly {
+        if let Ok(meta) = fs::metadata(path) {
+            let mut perms = meta.permissions();
+            perms.set_readonly(ro);
+            let _ = fs::set_permissions(path, perms);
+        }
+    }
+
+    #[cfg(unix)]
+    if let Some(m) = mode {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = fs::Permissions::from_mode(m);
+        let _ = fs::set_permissions(path, perms);
+    }
+
+    Ok(())
+}
+
 pub fn mtime_ns_to_system_time(mtime_ns: i64) -> SystemTime {
     if mtime_ns >= 0 {
         UNIX_EPOCH + Duration::from_nanos(mtime_ns as u64)
