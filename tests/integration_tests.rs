@@ -709,3 +709,78 @@ fn test_config_cli_overrides() {
     assert!(st2.success());
     assert!(dst_override.join("overridden.txt").exists());
 }
+
+#[test]
+fn test_multiple_paths_from_and_glob_masks() {
+    let ctx = TestContext::new("multi_paths_glob");
+    ctx.write_src_file("item1.txt", b"item 1");
+    ctx.write_src_file("item2.txt", b"item 2");
+    ctx.write_src_file("item3.txt", b"item 3");
+
+    let list_a = ctx.dir.join("backups_alpha.txt");
+    let mut f_a = File::create(&list_a).unwrap();
+    writeln!(f_a, "{}", ctx.src.join("item1.txt").display()).unwrap();
+
+    let list_b = ctx.dir.join("backups_beta.txt");
+    let mut f_b = File::create(&list_b).unwrap();
+    writeln!(f_b, "{}", ctx.src.join("item2.txt").display()).unwrap();
+
+    let list_extra = ctx.dir.join("extra_sources.txt");
+    let mut f_e = File::create(&list_extra).unwrap();
+    writeln!(f_e, "{}", ctx.src.join("item3.txt").display()).unwrap();
+
+    // 1. Multiple -f arguments: -f list_a -f list_extra
+    let dst1 = ctx.dir.join("dst1");
+    let st1 = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("-f")
+        .arg(&list_a)
+        .arg("-f")
+        .arg(&list_extra)
+        .arg("--flatten")
+        .arg(&dst1)
+        .status()
+        .unwrap();
+    assert!(st1.success());
+    assert_eq!(fs::read(dst1.join("item1.txt")).unwrap(), b"item 1");
+    assert_eq!(fs::read(dst1.join("item3.txt")).unwrap(), b"item 3");
+    assert!(!dst1.join("item2.txt").exists());
+
+    // 2. Glob wildcard mask: -f "backups_*.txt"
+    let dst2 = ctx.dir.join("dst2");
+    let mask_pattern = format!("{}/backups_*.txt", ctx.dir.display());
+    let st2 = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("-f")
+        .arg(&mask_pattern)
+        .arg("--flatten")
+        .arg(&dst2)
+        .status()
+        .unwrap();
+    assert!(st2.success());
+    assert_eq!(fs::read(dst2.join("item1.txt")).unwrap(), b"item 1");
+    assert_eq!(fs::read(dst2.join("item2.txt")).unwrap(), b"item 2");
+    assert!(!dst2.join("item3.txt").exists());
+
+    // 3. Config file with array of glob masks
+    let dst3 = ctx.dir.join("dst3");
+    let cfg_file = ctx.dir.join("multi_glob.toml");
+    let mut f_cfg = File::create(&cfg_file).unwrap();
+    writeln!(
+        f_cfg,
+        "paths_from = [\"{}\", \"{}\"]",
+        mask_pattern,
+        list_extra.display()
+    )
+    .unwrap();
+    writeln!(f_cfg, "dest = \"{}\"", dst3.display()).unwrap();
+    writeln!(f_cfg, "flatten = true").unwrap();
+
+    let st3 = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("-c")
+        .arg(&cfg_file)
+        .status()
+        .unwrap();
+    assert!(st3.success());
+    assert_eq!(fs::read(dst3.join("item1.txt")).unwrap(), b"item 1");
+    assert_eq!(fs::read(dst3.join("item2.txt")).unwrap(), b"item 2");
+    assert_eq!(fs::read(dst3.join("item3.txt")).unwrap(), b"item 3");
+}

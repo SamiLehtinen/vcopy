@@ -226,7 +226,8 @@ Commands:
 Options:
   -c, --config <FILE>            Configuration file (JSON or TOML) containing all parameters
   -d, --dest <DEST>              Destination directory (overrides positional destination or config)
-  -f, --paths-from <PATH>        Read source paths from a file or stdin ('-') (one per line, # for comments)
+  -f, --paths-from <PATTERN>     Read source paths from a file, glob pattern, or stdin ('-') (one per line)
+                                 Can be specified multiple times or comma-separated
                                  (aliases: --files-from, --sources-from)
       --flatten                  Single-directory flat mode (all files in destination root)
   -p, --preserve-permissions     Record and restore Unix mode and Windows readonly permissions
@@ -267,7 +268,7 @@ Precedence: CLI command-line flags and positional arguments always override sett
 
 ## 6. Test Suite & Verification
 
-The integration test suite consists of 22 automated tests:
+The integration test suite consists of 23 automated tests:
 
 * `tests/integration_tests.rs`:
   * `test_basic_backup_and_versioning`: Verifies initial mirror sync, subsequent modifications, and historical archiving.
@@ -277,6 +278,7 @@ The integration test suite consists of 22 automated tests:
   * `test_flatten_collisions_versioning_and_restore`: Verifies stem disambiguation, `.v0`/`.v1` monotonic versioning, and restore.
   * `test_files_from`: Verifies backward compatibility of `--files-from`.
   * `test_paths_from_file_and_stdin`: Verifies source path ingestion via `--paths-from` (files, folders, stdin `-`, and `--sources-from`).
+  * `test_multiple_paths_from_and_glob_masks`: Verifies multiple `-f` parameters, comma-separated lists, and glob pattern expansion (`backups*`).
   * `test_config_file_toml_and_json`: Verifies full parameter ingestion via TOML and JSON configuration files.
   * `test_config_cli_overrides`: Verifies CLI arguments override configuration file values.
   * `test_concurrency_lock`: Verifies concurrent execution blocking via `.lock`.

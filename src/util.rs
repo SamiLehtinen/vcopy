@@ -442,11 +442,12 @@ pub fn cleanup_empty_parents(file_path: &Path, stop_at_root: &Path) {
 
 pub fn parse_sources(
     sources_in: &[PathBuf],
-    paths_from: Option<&PathBuf>,
+    paths_from: &[String],
 ) -> std::io::Result<Vec<PathBuf>> {
     let mut resolved = Vec::new();
-    if let Some(pf) = paths_from {
-        if pf.as_os_str() == "-" {
+
+    for pf in paths_from {
+        if pf == "-" {
             let stdin = io::stdin();
             let reader = stdin.lock();
             for line in reader.lines() {
@@ -456,6 +457,42 @@ pub fn parse_sources(
                     continue;
                 }
                 resolved.push(PathBuf::from(trimmed));
+            }
+        } else if pf.contains('*') || pf.contains('?') || pf.contains('[') {
+            let paths: Vec<PathBuf> = match glob::glob(pf) {
+                Ok(entries) => entries
+                    .filter_map(Result::ok)
+                    .filter(|p| p.is_file())
+                    .collect(),
+                Err(e) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("Invalid glob pattern '{}': {}", pf, e),
+                    ));
+                }
+            };
+
+            if paths.is_empty() {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("No files matched pattern '{}'", pf),
+                ));
+            }
+
+            let mut sorted_paths = paths;
+            sorted_paths.sort();
+
+            for path in sorted_paths {
+                let file = File::open(&path)?;
+                let reader = BufReader::new(file);
+                for line in reader.lines() {
+                    let line = line?;
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() || trimmed.starts_with('#') {
+                        continue;
+                    }
+                    resolved.push(PathBuf::from(trimmed));
+                }
             }
         } else {
             let file = File::open(pf)?;
@@ -470,9 +507,22 @@ pub fn parse_sources(
             }
         }
     }
+
     for s in sources_in {
+        let s_str = s.to_string_lossy();
+        if s_str.contains('*') || s_str.contains('?') || s_str.contains('[') {
+            if let Ok(entries) = glob::glob(&s_str) {
+                let mut matched: Vec<PathBuf> = entries.filter_map(Result::ok).collect();
+                matched.sort();
+                if !matched.is_empty() {
+                    resolved.extend(matched);
+                    continue;
+                }
+            }
+        }
         resolved.push(s.clone());
     }
+
     Ok(resolved)
 }
 

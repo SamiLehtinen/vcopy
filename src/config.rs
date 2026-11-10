@@ -27,7 +27,7 @@ pub struct ConfigFile {
     pub dest: Option<PathBuf>,
 
     #[serde(default, alias = "files_from", alias = "sources_from")]
-    pub paths_from: Option<PathBuf>,
+    pub paths_from: Option<PathsValue>,
 
     #[serde(default)]
     pub max_versions: Option<usize>,
@@ -74,6 +74,19 @@ impl ConfigFile {
         self.sources
             .as_ref()
             .map(|s| s.clone().into_vec())
+            .unwrap_or_default()
+    }
+
+    pub fn get_paths_from(&self) -> Vec<String> {
+        self.paths_from
+            .as_ref()
+            .map(|s| {
+                s.clone()
+                    .into_vec()
+                    .into_iter()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .collect()
+            })
             .unwrap_or_default()
     }
 }

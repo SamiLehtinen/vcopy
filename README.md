@@ -123,8 +123,10 @@ vcopy /home/user/documents /home/user/photos /mnt/usb/backup
 # Single-directory flat backup (all files in root with version numbers)
 vcopy --flatten /home/user/documents /home/user/photos /mnt/usb/backup
 
-# Read source paths from a file or standard input ('-' for stdin)
+# Read source paths from files, glob masks, or standard input ('-' for stdin)
 vcopy --paths-from paths.txt /mnt/usb/backup
+vcopy -f list1.txt -f list2.txt /mnt/usb/backup
+vcopy -f "backups*" /mnt/usb/backup
 find /home/user -name "*.pdf" | vcopy --paths-from - /mnt/usb/backup
 
 # Run complete backup configured from a TOML or JSON file
@@ -208,7 +210,7 @@ vcopy prune -n 5 --dry-run -v /mnt/usb/backup
 | :--- | :--- | :--- | :--- |
 | `-c, --config` | `<FILE>` | None | Path to TOML or JSON configuration file containing backup settings. |
 | `-d, --dest` | `<DEST>` | None | Destination directory (overrides positional destination or config setting). |
-| `-f, --paths-from` | `<FILE>` or `-` | None | Read source paths (files or directories) from file or stdin (`-`). *(Aliases: `--files-from`, `--sources-from`)* |
+| `-f, --paths-from` | `<PATTERN>` or `-` | None | Read source paths (files or directories) from file, glob pattern (e.g. `backups*`), or stdin (`-`). Can be specified multiple times or comma-separated. *(Aliases: `--files-from`, `--sources-from`)* |
 | `--flatten` | Flag | `false` | Single-directory flat mode (all live and historical files stored in destination root). |
 | `-p, --preserve-permissions` | Flag | `false` | Record and restore POSIX file permissions and Windows readonly attributes. |
 | `--dry-run` | Flag | `false` | Simulate execution and display planned actions without modifying disk. |

@@ -49,16 +49,18 @@ struct Cli {
     )]
     dest: Option<PathBuf>,
 
-    /// Read source paths from a text file or stdin ('-' for stdin) (one path per line, # for comments)
+    /// Read source paths from a text file, glob pattern, or stdin ('-' for stdin) (one path per line, # for comments). Can be specified multiple times.
     #[arg(
         short = 'f',
         long = "paths-from",
         alias = "files-from",
         visible_alias = "sources-from",
-        value_name = "FILE",
-        global = true
+        value_name = "PATTERN_OR_STDIN",
+        global = true,
+        action = clap::ArgAction::Append,
+        value_delimiter = ','
     )]
-    paths_from: Option<PathBuf>,
+    paths_from: Vec<String>,
 
     /// Maximum number of snapshots to keep (overrides GFS retention)
     #[arg(short = 'n', long = "max-versions", value_name = "N")]
@@ -186,15 +188,17 @@ enum Commands {
 fn resolve_sources_and_dest(
     cli_paths: Vec<PathBuf>,
     cli_dest: Option<&PathBuf>,
-    cli_paths_from: Option<&PathBuf>,
+    cli_paths_from: &[String],
     config: Option<&ConfigFile>,
 ) -> Result<(Vec<PathBuf>, PathBuf), String> {
     let mut sources = Vec::new();
     let dest: PathBuf;
 
     let config_dest = config.and_then(|c| c.dest.clone());
-    let effective_paths_from =
-        cli_paths_from.or_else(|| config.and_then(|c| c.paths_from.as_ref()));
+    let mut effective_paths_from = cli_paths_from.to_vec();
+    if let Some(cfg) = config {
+        effective_paths_from.extend(cfg.get_paths_from());
+    }
 
     if let Some(d) = cli_dest {
         dest = d.clone();
@@ -224,7 +228,7 @@ fn resolve_sources_and_dest(
         sources.extend(cfg.get_sources());
     }
 
-    let parsed_sources = parse_sources(&sources, effective_paths_from)
+    let parsed_sources = parse_sources(&sources, &effective_paths_from)
         .map_err(|e| format!("Error reading source paths: {}", e))?;
 
     if parsed_sources.is_empty() {
@@ -338,7 +342,7 @@ fn execute() -> Result<(), String> {
         None => {
             if cli.args.is_empty()
                 && cli.dest.is_none()
-                && cli.paths_from.is_none()
+                && cli.paths_from.is_empty()
                 && cfg.is_none()
             {
                 eprintln!("Error: destination or sources missing. Run with --help.");
@@ -347,7 +351,7 @@ fn execute() -> Result<(), String> {
             let (sources, dest) = resolve_sources_and_dest(
                 cli.args,
                 cli.dest.as_ref(),
-                cli.paths_from.as_ref(),
+                &cli.paths_from,
                 cfg.as_ref(),
             )?;
             run_create(&sync_opts, &sources, &dest).map_err(|e| e.to_string())?;
@@ -358,7 +362,7 @@ fn execute() -> Result<(), String> {
             let (sources, dest) = resolve_sources_and_dest(
                 combined,
                 cli.dest.as_ref(),
-                cli.paths_from.as_ref(),
+                &cli.paths_from,
                 cfg.as_ref(),
             )?;
             run_create(&sync_opts, &sources, &dest).map_err(|e| e.to_string())?;
@@ -369,7 +373,7 @@ fn execute() -> Result<(), String> {
             let (sources, dest) = resolve_sources_and_dest(
                 combined,
                 cli.dest.as_ref(),
-                cli.paths_from.as_ref(),
+                &cli.paths_from,
                 cfg.as_ref(),
             )?;
             run_create(&sync_opts, &sources, &dest).map_err(|e| e.to_string())?;
