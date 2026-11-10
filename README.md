@@ -128,31 +128,83 @@ vcopy -f list1.txt -f list2.txt /mnt/usb/backup
 vcopy -f "backups*" /mnt/usb/backup
 find /home/user -name "*.pdf" | vcopy --paths-from - /mnt/usb/backup
 
-# Run complete backup configured from a TOML or JSON file
-vcopy -c backup.toml
+# Run complete backup configured from a configuration file (CLI flags, key-value, TOML, or JSON)
+vcopy -c backup.conf
 
 # Preserve Unix file modes and Windows readonly attributes
 vcopy -p /home/user/code /mnt/usb/backup
 ```
 
-### Configuration Files
-All parameters can be managed using a configuration file (`-c, --config <FILE>`) in TOML or JSON format:
+### Configuration Files (Zero-Obfuscation: Uses the Exact Same CLI Syntax)
 
-```toml
-# backup.toml
-sources = ["/home/user/documents", "/home/user/photos"]
-dest = "/mnt/usb/backup"
-flatten = false
-preserve_permissions = true
-verbose = true
-keep_hourly = 24
-keep_daily = 7
-keep_weekly = 4
-keep_monthly = 12
-keep_yearly = 1
+You do **not** need to learn a separate manual or format to write a configuration file. A configuration file can literally contain the exact command-line flags and arguments you already use on the CLI:
+
+#### Option 1: Direct CLI Arguments Format (`.conf` or `.args`)
+Write flags and paths exactly as you would type them in the terminal (one per line or space-separated; `#` for comments):
+
+```text
+# backup.conf - exact same flags as the command line!
+--sources /home/user/documents
+--sources /home/user/photos
+--dest /mnt/usb/backup
+--flatten
+--preserve-permissions
+--keep-daily 7
+--keep-weekly 4
 ```
 
-Command-line flags and positional arguments always override settings defined in the configuration file.
+Positional paths can also be listed directly:
+```text
+# backup.conf
+/home/user/documents
+/home/user/photos
+--dest /mnt/usb/backup
+--flatten
+--keep-daily 7
+```
+
+#### Option 2: Simple Key-Value Format
+Write plain unquoted `key = value` lines matching the exact CLI flag names:
+
+```text
+# backup.conf
+dest = /mnt/usb/backup
+sources = /home/user/documents, /home/user/photos
+flatten = true
+preserve-permissions = true
+keep-daily = 7
+keep-weekly = 4
+```
+
+#### Option 3: TOML or JSON Format
+If you prefer TOML or JSON, the exact same CLI option names (kebab-case or snake_case) work identically:
+
+```toml
+# backup.toml - uses exact CLI parameter names!
+dest = "/mnt/usb/backup"
+sources = ["/home/user/documents", "/home/user/photos"]
+flatten = true
+preserve-permissions = true
+verbose = true
+keep-hourly = 24
+keep-daily = 7
+keep-weekly = 4
+keep-monthly = 12
+keep-yearly = 1
+```
+
+```json
+{
+  "dest": "/mnt/usb/backup",
+  "sources": ["/home/user/documents", "/home/user/photos"],
+  "flatten": true,
+  "preserve-permissions": true,
+  "keep-daily": 7,
+  "keep-weekly": 4
+}
+```
+
+Command-line flags and positional arguments always override settings defined in any configuration file.
 
 ### 2. Create Snapshot (Without Pruning)
 Creates a backup snapshot without running retention pruning:
@@ -207,8 +259,9 @@ vcopy prune -n 5 --dry-run -v /mnt/usb/backup
 
 | Option | Value | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `-c, --config` | `<FILE>` | None | Path to TOML or JSON configuration file containing backup settings. |
-| `-d, --dest` | `<DEST>` | None | Destination directory (overrides positional destination or config setting). |
+| `-c, --config` | `<FILE>` | None | Path to configuration file containing backup settings. Accepts direct CLI arguments format (exact same flags/args as command line), key-value, TOML, or JSON. |
+| `-s, --sources` | `<SOURCE>` | None | Explicit source directory or file paths (can be specified multiple times or comma-separated). *(Alias: `--source`)* |
+| `-d, --dest` | `<DEST>` | None | Destination directory (overrides positional destination or config setting). *(Alias: `--destination`)* |
 | `-f, --paths-from` | `<PATTERN>` or `-` | None | Read source paths (files or directories) from file, glob pattern (e.g. `backups*`), or stdin (`-`). Can be specified multiple times or comma-separated. *(Aliases: `--files-from`, `--sources-from`)* |
 | `--flatten` | Flag | `false` | Single-directory flat mode (all live and historical files stored in destination root). |
 | `-p, --preserve-permissions` | Flag | `false` | Record and restore POSIX file permissions and Windows readonly attributes. |

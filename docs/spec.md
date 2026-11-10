@@ -223,7 +223,8 @@ Commands:
   list     List all snapshots in destination with summary statistics
 
 Options:
-  -c, --config <FILE>            Configuration file (JSON or TOML) containing all parameters
+  -c, --config <FILE>            Configuration file (CLI flags, key-value, TOML, or JSON)
+  -s, --sources <SOURCE>         Explicit source paths (can be specified multiple times or comma-separated)
   -d, --dest <DEST>              Destination directory (overrides positional destination or config)
   -f, --paths-from <PATTERN>     Read source paths from a file, glob pattern, or stdin ('-') (one per line)
                                  Can be specified multiple times or comma-separated
@@ -243,31 +244,58 @@ Options:
 ```
 
 ### Configuration File Support
-All parameters can be specified via a configuration file (`-c, --config <FILE>`) in either TOML or JSON format:
+Configuration files eliminate format friction by supporting the **exact same flags and parameter names** used on the command-line:
 
-```toml
-# vcopy.toml
-sources = ["/home/user/documents", "/home/user/photos"]
-dest = "/mnt/usb/backup"
-flatten = false
-preserve_permissions = true
-verbose = false
-dry_run = false
-max_versions = 10
-keep_hourly = 24
-keep_daily = 7
-keep_weekly = 4
-keep_monthly = 12
-keep_yearly = 1
+#### 1. Direct CLI Arguments Format (`.conf` or `.args`)
+Write options and paths exactly as they appear on the command line:
+```text
+# vcopy.conf
+--sources /home/user/documents
+--sources /home/user/photos
+--dest /mnt/usb/backup
+--flatten
+--preserve-permissions
+--keep-daily 7
+--keep-weekly 4
 ```
 
-Precedence: CLI command-line flags and positional arguments always override settings defined in the configuration file.
+#### 2. Simple Key-Value Format
+Write plain `key = value` lines matching CLI options:
+```text
+# vcopy.conf
+dest = /mnt/usb/backup
+sources = /home/user/documents, /home/user/photos
+flatten = true
+preserve-permissions = true
+keep-daily = 7
+keep-weekly = 4
+```
+
+#### 3. TOML and JSON Format
+Supports identical kebab-case and snake_case keys:
+```toml
+# vcopy.toml
+dest = "/mnt/usb/backup"
+sources = ["/home/user/documents", "/home/user/photos"]
+flatten = true
+preserve-permissions = true
+verbose = false
+dry-run = false
+max-versions = 10
+keep-hourly = 24
+keep-daily = 7
+keep-weekly = 4
+keep-monthly = 12
+keep-yearly = 1
+```
+
+Precedence: CLI command-line flags and positional arguments always override settings defined in any configuration file.
 
 ---
 
 ## 6. Test Suite & Verification
 
-The integration test suite consists of 23 automated tests:
+The integration test suite consists of 26 automated tests:
 
 * `tests/integration_tests.rs`:
   * `test_basic_backup_and_versioning`: Verifies initial mirror sync, subsequent modifications, and historical archiving.
@@ -279,7 +307,10 @@ The integration test suite consists of 23 automated tests:
   * `test_paths_from_file_and_stdin`: Verifies source path ingestion via `--paths-from` (files, folders, stdin `-`, and `--sources-from`).
   * `test_multiple_paths_from_and_glob_masks`: Verifies multiple `-f` parameters, comma-separated lists, and glob pattern expansion (`backups*`).
   * `test_config_file_toml_and_json`: Verifies full parameter ingestion via TOML and JSON configuration files.
+  * `test_config_cli_arguments_format`: Verifies configuration files written in direct CLI flags format (`--dest`, `--sources`, `--flatten`).
+  * `test_config_key_value_and_kebab_case`: Verifies configuration files written in unquoted key-value format with exact kebab-case CLI names.
   * `test_config_cli_overrides`: Verifies CLI arguments override configuration file values.
+  * `test_cli_sources_flag`: Verifies `-s / --sources` flag on CLI.
   * `test_concurrency_lock`: Verifies concurrent execution blocking via `.lock`.
   * `test_no_changes_does_not_create_snapshot`: Verifies no redundant snapshots created when sources are unchanged.
   * `test_dangerous_overlapping_and_root_paths_rejected`: Verifies safety guards on root and overlapping paths.

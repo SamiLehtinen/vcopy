@@ -35,7 +35,19 @@ struct Cli {
     #[arg(value_name = "SOURCES... DEST", trailing_var_arg = true)]
     args: Vec<PathBuf>,
 
-    /// Configuration file (JSON or TOML) containing backup settings
+    /// Explicit source paths (can be specified multiple times or comma-separated)
+    #[arg(
+        short = 's',
+        long = "sources",
+        alias = "source",
+        value_name = "SOURCE",
+        global = true,
+        action = clap::ArgAction::Append,
+        value_delimiter = ','
+    )]
+    sources: Vec<PathBuf>,
+
+    /// Configuration file (CLI arguments format, TOML, or JSON) containing backup settings
     #[arg(short = 'c', long = "config", value_name = "FILE", global = true)]
     config: Option<PathBuf>,
 
@@ -187,6 +199,7 @@ enum Commands {
 
 fn resolve_sources_and_dest(
     cli_paths: Vec<PathBuf>,
+    cli_sources: &[PathBuf],
     cli_dest: Option<&PathBuf>,
     cli_paths_from: &[String],
     config: Option<&ConfigFile>,
@@ -224,6 +237,8 @@ fn resolve_sources_and_dest(
         );
     }
 
+    sources.extend(cli_sources.to_vec());
+
     if let Some(cfg) = config {
         sources.extend(cfg.get_sources());
     }
@@ -233,7 +248,8 @@ fn resolve_sources_and_dest(
 
     if parsed_sources.is_empty() {
         return Err(
-            "Error: No source paths provided via arguments, --paths-from, or --config.".to_string(),
+            "Error: No source paths provided via arguments, --sources, --paths-from, or --config."
+                .to_string(),
         );
     }
 
@@ -341,6 +357,7 @@ fn execute() -> Result<(), String> {
     match effective_command {
         None => {
             if cli.args.is_empty()
+                && cli.sources.is_empty()
                 && cli.dest.is_none()
                 && cli.paths_from.is_empty()
                 && cfg.is_none()
@@ -350,6 +367,7 @@ fn execute() -> Result<(), String> {
             }
             let (sources, dest) = resolve_sources_and_dest(
                 cli.args,
+                &cli.sources,
                 cli.dest.as_ref(),
                 &cli.paths_from,
                 cfg.as_ref(),
@@ -361,6 +379,7 @@ fn execute() -> Result<(), String> {
             let combined = if paths.is_empty() { cli.args } else { paths };
             let (sources, dest) = resolve_sources_and_dest(
                 combined,
+                &cli.sources,
                 cli.dest.as_ref(),
                 &cli.paths_from,
                 cfg.as_ref(),
@@ -372,6 +391,7 @@ fn execute() -> Result<(), String> {
             let combined = if paths.is_empty() { cli.args } else { paths };
             let (sources, dest) = resolve_sources_and_dest(
                 combined,
+                &cli.sources,
                 cli.dest.as_ref(),
                 &cli.paths_from,
                 cfg.as_ref(),

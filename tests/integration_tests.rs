@@ -785,3 +785,80 @@ fn test_multiple_paths_from_and_glob_masks() {
     assert_eq!(fs::read(dst3.join("item2.txt")).unwrap(), b"item 2");
     assert_eq!(fs::read(dst3.join("item3.txt")).unwrap(), b"item 3");
 }
+
+#[test]
+fn test_config_cli_arguments_format() {
+    let ctx = TestContext::new("config_cli_args");
+    ctx.write_src_file("cli_arg_file.txt", b"hello cli arg config");
+
+    let dst = ctx.dir.join("dst_cli_args");
+    let cli_conf = ctx.dir.join("vcopy.conf");
+    let mut f = File::create(&cli_conf).unwrap();
+    writeln!(f, "# This is a comment").unwrap();
+    writeln!(f, "--sources {}", ctx.src.display()).unwrap();
+    writeln!(f, "--dest {}", dst.display()).unwrap();
+    writeln!(f, "--flatten").unwrap();
+    writeln!(f, "--keep-daily 7").unwrap();
+    writeln!(f, "--keep-weekly 4").unwrap();
+    writeln!(f, "--verbose").unwrap();
+
+    let st = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("-c")
+        .arg(&cli_conf)
+        .status()
+        .unwrap();
+    assert!(st.success());
+    assert_eq!(
+        fs::read(dst.join("cli_arg_file.txt")).unwrap(),
+        b"hello cli arg config"
+    );
+}
+
+#[test]
+fn test_config_key_value_and_kebab_case() {
+    let ctx = TestContext::new("config_kv");
+    ctx.write_src_file("kv_file.txt", b"hello key-value config");
+
+    let dst = ctx.dir.join("dst_kv");
+    let kv_conf = ctx.dir.join("vcopy_kv.conf");
+    let mut f = File::create(&kv_conf).unwrap();
+    writeln!(f, "# Unquoted key-value using exact CLI names").unwrap();
+    writeln!(f, "dest = {}", dst.display()).unwrap();
+    writeln!(f, "sources = {}", ctx.src.display()).unwrap();
+    writeln!(f, "flatten = true").unwrap();
+    writeln!(f, "keep-daily = 7").unwrap();
+    writeln!(f, "preserve-permissions = true").unwrap();
+
+    let st = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--config")
+        .arg(&kv_conf)
+        .status()
+        .unwrap();
+    assert!(st.success());
+    assert_eq!(
+        fs::read(dst.join("kv_file.txt")).unwrap(),
+        b"hello key-value config"
+    );
+}
+
+#[test]
+fn test_cli_sources_flag() {
+    let ctx = TestContext::new("cli_sources_flag");
+    ctx.write_src_file("flag_file.txt", b"flag sources content");
+
+    let dst = ctx.dir.join("dst_flag");
+    // Test invoking with --sources and --dest
+    let st = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--sources")
+        .arg(&ctx.src)
+        .arg("--dest")
+        .arg(&dst)
+        .arg("--flatten")
+        .status()
+        .unwrap();
+    assert!(st.success());
+    assert_eq!(
+        fs::read(dst.join("flag_file.txt")).unwrap(),
+        b"flag sources content"
+    );
+}
