@@ -5,3 +5,5 @@
 .version-history/
 .lock
 .pid_lock
+.env
+.env.*

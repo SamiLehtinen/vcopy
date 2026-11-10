@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/samilehtinen/vcopy/actions/workflows/ci.yml/badge.svg)](https://github.com/samilehtinen/vcopy/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/samilehtinen/vcopy?color=blue)](https://github.com/samilehtinen/vcopy/releases)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-0BSD-green.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
 
 **Directly browseable, zero-link, multi-platform file sync with snapshot history.**
@@ -201,8 +201,4 @@ vcopy prune -n 5 --dry-run -v /mnt/usb/backup
 
 ## License
 
-Dual-licensed under either:
-* Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-* MIT License ([LICENSE-MIT](LICENSE-MIT))
-
-at your option.
+Licensed under the Zero-Clause BSD (0BSD) License. See [LICENSE](LICENSE) for details.
