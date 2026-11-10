@@ -202,6 +202,21 @@ vcopy prune -n 5 --dry-run -v /mnt/usb/backup
 
 ---
 
+## CLI Options Reference
+
+| Option | Value | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `-c, --config` | `<FILE>` | None | Path to TOML or JSON configuration file containing backup settings. |
+| `-d, --dest` | `<DEST>` | None | Destination directory (overrides positional destination or config setting). |
+| `-f, --paths-from` | `<FILE>` or `-` | None | Read source paths (files or directories) from file or stdin (`-`). *(Aliases: `--files-from`, `--sources-from`)* |
+| `--flatten` | Flag | `false` | Single-directory flat mode (all live and historical files stored in destination root). |
+| `-p, --preserve-permissions` | Flag | `false` | Record and restore POSIX file permissions and Windows readonly attributes. |
+| `--dry-run` | Flag | `false` | Simulate execution and display planned actions without modifying disk. |
+| `-v, --verbose` | Flag | `false` | Enable detailed output for copied, modified, and deleted files. |
+| `--target-time` | `<TIMESTAMP>` | `latest` | Point-in-time timestamp (`YYYY-MM-DD_HHMMSS` or prefix) for `restore`. |
+
+---
+
 ## Retention Policy (GFS & Count)
 
 | Flag | Default | Description |
