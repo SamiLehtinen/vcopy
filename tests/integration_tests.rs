@@ -556,3 +556,156 @@ fn test_flatten_collisions_versioning_and_restore() {
 
     let _ = fs::remove_dir_all(&base);
 }
+
+#[test]
+fn test_paths_from_file_and_stdin() {
+    let ctx = TestContext::new("paths_from_test");
+    ctx.write_src_file("doc1.txt", b"doc 1 content");
+    ctx.write_src_file("sub/doc2.txt", b"doc 2 content");
+
+    let sub_dir = ctx.src.join("sub");
+    let doc1_file = ctx.src.join("doc1.txt");
+
+    // 1. Test --paths-from with a file containing both a file and a directory path
+    let list_file = ctx.dir.join("paths_list.txt");
+    let mut f = File::create(&list_file).unwrap();
+    writeln!(f, "# Header comment").unwrap();
+    writeln!(f, "{}", doc1_file.display()).unwrap();
+    writeln!(f, "{}", sub_dir.display()).unwrap();
+
+    let st = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--paths-from")
+        .arg(&list_file)
+        .arg("--flatten")
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st.success());
+    assert_eq!(ctx.read_dst_file("doc1.txt").unwrap(), b"doc 1 content");
+    assert_eq!(ctx.read_dst_file("doc2.txt").unwrap(), b"doc 2 content");
+
+    // 2. Test --paths-from - with stdin piping
+    let dst2 = ctx.dir.join("dst2");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--paths-from")
+        .arg("-")
+        .arg("--flatten")
+        .arg(&dst2)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    {
+        let mut stdin = child.stdin.take().unwrap();
+        writeln!(stdin, "# Stdin comment").unwrap();
+        writeln!(stdin, "{}", doc1_file.display()).unwrap();
+        writeln!(stdin, "{}", sub_dir.display()).unwrap();
+    }
+
+    let status = child.wait().unwrap();
+    assert!(status.success());
+    assert_eq!(fs::read(dst2.join("doc1.txt")).unwrap(), b"doc 1 content");
+    assert_eq!(fs::read(dst2.join("doc2.txt")).unwrap(), b"doc 2 content");
+
+    // 3. Test --sources-from alias
+    let dst3 = ctx.dir.join("dst3");
+    let st3 = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--sources-from")
+        .arg(&list_file)
+        .arg("--flatten")
+        .arg(&dst3)
+        .status()
+        .unwrap();
+    assert!(st3.success());
+    assert_eq!(fs::read(dst3.join("doc1.txt")).unwrap(), b"doc 1 content");
+}
+
+#[test]
+fn test_config_file_toml_and_json() {
+    let ctx = TestContext::new("config_test");
+    ctx.write_src_file("cfg_item.txt", b"from config");
+
+    let dst_toml = ctx.dir.join("dst_toml");
+    let toml_config = ctx.dir.join("vcopy.toml");
+    let mut f = File::create(&toml_config).unwrap();
+    writeln!(f, "sources = [\"{}\"]", ctx.src.display()).unwrap();
+    writeln!(f, "dest = \"{}\"", dst_toml.display()).unwrap();
+    writeln!(f, "flatten = false").unwrap();
+    writeln!(f, "verbose = true").unwrap();
+    writeln!(f, "keep_hourly = 10").unwrap();
+
+    // Run vcopy -c vcopy.toml without any positional arguments
+    let st = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("-c")
+        .arg(&toml_config)
+        .status()
+        .unwrap();
+    assert!(st.success());
+    assert_eq!(
+        fs::read(dst_toml.join("cfg_item.txt")).unwrap(),
+        b"from config"
+    );
+
+    // Test JSON configuration file
+    let dst_json = ctx.dir.join("dst_json");
+    let json_config = ctx.dir.join("vcopy.json");
+    let mut f2 = File::create(&json_config).unwrap();
+    writeln!(
+        f2,
+        r#"{{
+            "sources": ["{}"],
+            "dest": "{}",
+            "flatten": true,
+            "verbose": true
+        }}"#,
+        ctx.src.display(),
+        dst_json.display()
+    )
+    .unwrap();
+
+    let st2 = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--config")
+        .arg(&json_config)
+        .status()
+        .unwrap();
+    assert!(st2.success());
+    assert_eq!(
+        fs::read(dst_json.join("cfg_item.txt")).unwrap(),
+        b"from config"
+    );
+}
+
+#[test]
+fn test_config_cli_overrides() {
+    let ctx = TestContext::new("config_overrides");
+    ctx.write_src_file("overridden.txt", b"override content");
+
+    let dst_cfg = ctx.dir.join("dst_cfg");
+    let dst_override = ctx.dir.join("dst_override");
+    let toml_config = ctx.dir.join("vcopy.toml");
+    let mut f = File::create(&toml_config).unwrap();
+    writeln!(f, "sources = [\"{}\"]", ctx.src.display()).unwrap();
+    writeln!(f, "dest = \"{}\"", dst_cfg.display()).unwrap();
+    writeln!(f, "dry_run = false").unwrap();
+
+    // 1. CLI --dry-run overrides config dry_run = false
+    let st = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("-c")
+        .arg(&toml_config)
+        .arg("--dry-run")
+        .status()
+        .unwrap();
+    assert!(st.success());
+    assert!(!dst_cfg.exists());
+
+    // 2. CLI --dest overrides config dest
+    let st2 = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("-c")
+        .arg(&toml_config)
+        .arg("--dest")
+        .arg(&dst_override)
+        .status()
+        .unwrap();
+    assert!(st2.success());
+    assert!(dst_override.join("overridden.txt").exists());
+}

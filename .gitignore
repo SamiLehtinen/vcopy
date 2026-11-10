@@ -7,3 +7,5 @@
 .pid_lock
 .env
 .env.*
+*.o
+.*.o

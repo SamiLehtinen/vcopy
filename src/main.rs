@@ -3,6 +3,7 @@ use std::process;
 
 use clap::{Parser, Subcommand};
 
+mod config;
 mod history;
 mod lock;
 mod models;
@@ -11,6 +12,7 @@ mod restore;
 mod sync;
 mod util;
 
+use config::ConfigFile;
 use history::list_snapshots;
 use prune::{run_prune, PruneOptions};
 use restore::{run_restore, RestoreOptions};
@@ -33,33 +35,54 @@ struct Cli {
     #[arg(value_name = "SOURCES... DEST", trailing_var_arg = true)]
     args: Vec<PathBuf>,
 
-    /// Read source paths from a text file (one path per line, # for comments)
-    #[arg(short = 'f', long = "files-from", value_name = "FILE")]
-    files_from: Option<PathBuf>,
+    /// Configuration file (JSON or TOML) containing backup settings
+    #[arg(short = 'c', long = "config", value_name = "FILE", global = true)]
+    config: Option<PathBuf>,
+
+    /// Destination directory (overrides positional destination or config)
+    #[arg(
+        short = 'd',
+        long = "dest",
+        alias = "destination",
+        value_name = "DEST",
+        global = true
+    )]
+    dest: Option<PathBuf>,
+
+    /// Read source paths from a text file or stdin ('-' for stdin) (one path per line, # for comments)
+    #[arg(
+        short = 'f',
+        long = "paths-from",
+        alias = "files-from",
+        visible_alias = "sources-from",
+        value_name = "FILE",
+        global = true
+    )]
+    paths_from: Option<PathBuf>,
 
     /// Maximum number of snapshots to keep (overrides GFS retention)
     #[arg(short = 'n', long = "max-versions", value_name = "N")]
     max_versions: Option<usize>,
 
-    /// Number of hourly snapshot buckets to retain in GFS mode
-    #[arg(long = "keep-hourly", default_value_t = 24, value_name = "N")]
-    keep_hourly: usize,
+    /// Number of hourly snapshot buckets to retain in GFS mode (default: 24)
+    #[arg(long = "keep-hourly", value_name = "N")]
+    keep_hourly: Option<usize>,
 
-    /// Number of daily snapshot buckets to retain in GFS mode
-    #[arg(long = "keep-daily", default_value_t = 7, value_name = "N")]
-    keep_daily: usize,
+    /// Number of daily snapshot buckets to retain in GFS mode (default: 7)
+    #[arg(long = "keep-daily", value_name = "N")]
+    keep_daily: Option<usize>,
 
-    /// Number of weekly snapshot buckets to retain in GFS mode
-    #[arg(long = "keep-weekly", default_value_t = 4, value_name = "N")]
-    keep_weekly: usize,
+    /// Number of weekly snapshot buckets to retain in GFS mode (default: 4)
+    #[arg(long = "keep-weekly", value_name = "N")]
+    keep_weekly: Option<usize>,
 
-    /// Number of monthly snapshot buckets to retain in GFS mode
-    #[arg(long = "keep-monthly", default_value_t = 12, value_name = "N")]
-    keep_monthly: usize,
+    /// Number of monthly snapshot buckets to retain in GFS mode (default: 12)
+    #[arg(long = "keep-monthly", value_name = "N")]
+    keep_monthly: Option<usize>,
 
-    /// Number of yearly snapshot buckets to retain in GFS mode
-    #[arg(long = "keep-yearly", default_value_t = 1, value_name = "N")]
-    keep_yearly: usize,
+    /// Number of yearly snapshot buckets to retain in GFS mode (default: 1)
+    #[arg(long = "keep-yearly", value_name = "N")]
+    keep_yearly: Option<usize>,
 
     /// Perform a trial run without making any filesystem modifications
     #[arg(long = "dry-run")]
@@ -132,7 +155,7 @@ enum Commands {
 
         /// Destination backup directory containing .version-history/
         #[arg(value_name = "DEST")]
-        dest: PathBuf,
+        dest: Option<PathBuf>,
     },
     /// Restore files from a specific snapshot or point in time
     Restore {
@@ -146,117 +169,276 @@ enum Commands {
 
         /// Backup directory containing mirror and .version-history/
         #[arg(value_name = "DEST")]
-        dest: PathBuf,
+        dest: Option<PathBuf>,
 
         /// Target directory where restored files will be written
         #[arg(value_name = "OUTPUT_DIR")]
-        target_out: PathBuf,
+        target_out: Option<PathBuf>,
     },
     /// List all snapshots in destination with summary statistics
     List {
         /// Backup directory containing .version-history/
         #[arg(value_name = "DEST")]
-        dest: PathBuf,
+        dest: Option<PathBuf>,
     },
 }
 
-fn separate_sources_and_dest(
-    mut paths: Vec<PathBuf>,
-    files_from: Option<&PathBuf>,
+fn resolve_sources_and_dest(
+    cli_paths: Vec<PathBuf>,
+    cli_dest: Option<&PathBuf>,
+    cli_paths_from: Option<&PathBuf>,
+    config: Option<&ConfigFile>,
 ) -> Result<(Vec<PathBuf>, PathBuf), String> {
-    if paths.is_empty() {
-        return Err("Error: Destination directory required.".to_string());
-    }
-    let dest = paths.pop().unwrap();
-    let sources = parse_sources(&paths, files_from)
-        .map_err(|e| format!("Error reading --files-from: {}", e))?;
+    let mut sources = Vec::new();
+    let dest: PathBuf;
 
-    if sources.is_empty() {
-        return Err("Error: No sources provided via arguments or --files-from.".to_string());
+    let config_dest = config.and_then(|c| c.dest.clone());
+    let effective_paths_from =
+        cli_paths_from.or_else(|| config.and_then(|c| c.paths_from.as_ref()));
+
+    if let Some(d) = cli_dest {
+        dest = d.clone();
+        sources.extend(cli_paths);
+    } else if !cli_paths.is_empty() {
+        if cli_paths.len() == 1 {
+            if let Some(cd) = config_dest {
+                sources.push(cli_paths[0].clone());
+                dest = cd;
+            } else {
+                dest = cli_paths[0].clone();
+            }
+        } else {
+            let mut p = cli_paths;
+            dest = p.pop().unwrap();
+            sources.extend(p);
+        }
+    } else if let Some(cd) = config_dest {
+        dest = cd;
+    } else {
+        return Err(
+            "Error: Destination directory required via arguments, --dest, or --config.".to_string(),
+        );
     }
-    Ok((sources, dest))
+
+    if let Some(cfg) = config {
+        sources.extend(cfg.get_sources());
+    }
+
+    let parsed_sources = parse_sources(&sources, effective_paths_from)
+        .map_err(|e| format!("Error reading source paths: {}", e))?;
+
+    if parsed_sources.is_empty() {
+        return Err(
+            "Error: No source paths provided via arguments, --paths-from, or --config.".to_string(),
+        );
+    }
+
+    let mut unique = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for s in parsed_sources {
+        if seen.insert(s.clone()) {
+            unique.push(s);
+        }
+    }
+
+    Ok((unique, dest))
 }
 
 fn execute() -> Result<(), String> {
     let cli = Cli::parse();
 
+    let cfg = match &cli.config {
+        Some(p) => Some(crate::config::load_config(p)?),
+        None => None,
+    };
+
+    let flatten = cli.flatten || cfg.as_ref().and_then(|c| c.flatten).unwrap_or(false);
+    let dry_run = cli.dry_run || cfg.as_ref().and_then(|c| c.dry_run).unwrap_or(false);
+    let verbose = cli.verbose || cfg.as_ref().and_then(|c| c.verbose).unwrap_or(false);
+    let preserve_permissions = cli.preserve_permissions
+        || cfg
+            .as_ref()
+            .and_then(|c| c.preserve_permissions)
+            .unwrap_or(false);
+
+    let max_versions = cli
+        .max_versions
+        .or_else(|| cfg.as_ref().and_then(|c| c.max_versions));
+    let keep_hourly = cli
+        .keep_hourly
+        .or_else(|| cfg.as_ref().and_then(|c| c.keep_hourly))
+        .unwrap_or(24);
+    let keep_daily = cli
+        .keep_daily
+        .or_else(|| cfg.as_ref().and_then(|c| c.keep_daily))
+        .unwrap_or(7);
+    let keep_weekly = cli
+        .keep_weekly
+        .or_else(|| cfg.as_ref().and_then(|c| c.keep_weekly))
+        .unwrap_or(4);
+    let keep_monthly = cli
+        .keep_monthly
+        .or_else(|| cfg.as_ref().and_then(|c| c.keep_monthly))
+        .unwrap_or(12);
+    let keep_yearly = cli
+        .keep_yearly
+        .or_else(|| cfg.as_ref().and_then(|c| c.keep_yearly))
+        .unwrap_or(1);
+    let target_time = cli
+        .target_time
+        .or_else(|| cfg.as_ref().and_then(|c| c.target_time.clone()));
+
     let sync_opts = SyncOptions {
-        flatten: cli.flatten,
-        dry_run: cli.dry_run,
-        verbose: cli.verbose,
-        preserve_permissions: cli.preserve_permissions,
+        flatten,
+        dry_run,
+        verbose,
+        preserve_permissions,
     };
 
     let prune_opts = PruneOptions {
-        max_versions: cli.max_versions,
-        keep_hourly: cli.keep_hourly,
-        keep_daily: cli.keep_daily,
-        keep_weekly: cli.keep_weekly,
-        keep_monthly: cli.keep_monthly,
-        keep_yearly: cli.keep_yearly,
-        dry_run: cli.dry_run,
-        verbose: cli.verbose,
+        max_versions,
+        keep_hourly,
+        keep_daily,
+        keep_weekly,
+        keep_monthly,
+        keep_yearly,
+        dry_run,
+        verbose,
     };
 
-    match cli.command {
+    let effective_command = cli.command.or_else(|| {
+        cfg.as_ref()
+            .and_then(|c| c.command.as_deref())
+            .and_then(|cmd_str| match cmd_str.to_ascii_lowercase().as_str() {
+                "prune" => Some(Commands::Prune {
+                    max_versions: None,
+                    keep_hourly: None,
+                    keep_daily: None,
+                    keep_weekly: None,
+                    keep_monthly: None,
+                    keep_yearly: None,
+                    dry_run: false,
+                    verbose: false,
+                    dest: None,
+                }),
+                "restore" => Some(Commands::Restore {
+                    target_time: None,
+                    verbose: false,
+                    dest: None,
+                    target_out: None,
+                }),
+                "list" => Some(Commands::List { dest: None }),
+                "create" => Some(Commands::Create { paths: Vec::new() }),
+                "auto" => Some(Commands::Auto { paths: Vec::new() }),
+                _ => None,
+            })
+    });
+
+    match effective_command {
         None => {
-            if cli.args.is_empty() && cli.files_from.is_none() {
+            if cli.args.is_empty()
+                && cli.dest.is_none()
+                && cli.paths_from.is_none()
+                && cfg.is_none()
+            {
                 eprintln!("Error: destination or sources missing. Run with --help.");
                 process::exit(1);
             }
-            let (sources, dest) = separate_sources_and_dest(cli.args, cli.files_from.as_ref())?;
+            let (sources, dest) = resolve_sources_and_dest(
+                cli.args,
+                cli.dest.as_ref(),
+                cli.paths_from.as_ref(),
+                cfg.as_ref(),
+            )?;
             run_create(&sync_opts, &sources, &dest).map_err(|e| e.to_string())?;
             run_prune(&prune_opts, &dest).map_err(|e| e.to_string())?;
         }
         Some(Commands::Auto { paths }) => {
             let combined = if paths.is_empty() { cli.args } else { paths };
-            let (sources, dest) = separate_sources_and_dest(combined, cli.files_from.as_ref())?;
+            let (sources, dest) = resolve_sources_and_dest(
+                combined,
+                cli.dest.as_ref(),
+                cli.paths_from.as_ref(),
+                cfg.as_ref(),
+            )?;
             run_create(&sync_opts, &sources, &dest).map_err(|e| e.to_string())?;
             run_prune(&prune_opts, &dest).map_err(|e| e.to_string())?;
         }
         Some(Commands::Create { paths }) => {
             let combined = if paths.is_empty() { cli.args } else { paths };
-            let (sources, dest) = separate_sources_and_dest(combined, cli.files_from.as_ref())?;
+            let (sources, dest) = resolve_sources_and_dest(
+                combined,
+                cli.dest.as_ref(),
+                cli.paths_from.as_ref(),
+                cfg.as_ref(),
+            )?;
             run_create(&sync_opts, &sources, &dest).map_err(|e| e.to_string())?;
         }
         Some(Commands::Prune {
-            max_versions,
-            keep_hourly,
-            keep_daily,
-            keep_weekly,
-            keep_monthly,
-            keep_yearly,
-            dry_run,
-            verbose,
-            dest,
+            max_versions: p_max_versions,
+            keep_hourly: p_keep_hourly,
+            keep_daily: p_keep_daily,
+            keep_weekly: p_keep_weekly,
+            keep_monthly: p_keep_monthly,
+            keep_yearly: p_keep_yearly,
+            dry_run: p_dry_run,
+            verbose: p_verbose,
+            dest: p_dest,
         }) => {
             let specific_prune_opts = PruneOptions {
-                max_versions: max_versions.or(cli.max_versions),
-                keep_hourly: keep_hourly.unwrap_or(cli.keep_hourly),
-                keep_daily: keep_daily.unwrap_or(cli.keep_daily),
-                keep_weekly: keep_weekly.unwrap_or(cli.keep_weekly),
-                keep_monthly: keep_monthly.unwrap_or(cli.keep_monthly),
-                keep_yearly: keep_yearly.unwrap_or(cli.keep_yearly),
-                dry_run: dry_run || cli.dry_run,
-                verbose: verbose || cli.verbose,
+                max_versions: p_max_versions.or(max_versions),
+                keep_hourly: p_keep_hourly.unwrap_or(keep_hourly),
+                keep_daily: p_keep_daily.unwrap_or(keep_daily),
+                keep_weekly: p_keep_weekly.unwrap_or(keep_weekly),
+                keep_monthly: p_keep_monthly.unwrap_or(keep_monthly),
+                keep_yearly: p_keep_yearly.unwrap_or(keep_yearly),
+                dry_run: p_dry_run || dry_run,
+                verbose: p_verbose || verbose,
             };
-            run_prune(&specific_prune_opts, &dest).map_err(|e| e.to_string())?;
+            let effective_dest = p_dest
+                .or_else(|| cli.dest.clone())
+                .or_else(|| cfg.as_ref().and_then(|c| c.dest.clone()))
+                .ok_or_else(|| {
+                    "Error: Destination directory required via argument, --dest, or --config."
+                        .to_string()
+                })?;
+            run_prune(&specific_prune_opts, &effective_dest).map_err(|e| e.to_string())?;
         }
         Some(Commands::Restore {
-            target_time,
-            verbose,
-            dest,
-            target_out,
+            target_time: r_target_time,
+            verbose: r_verbose,
+            dest: r_dest,
+            target_out: r_target_out,
         }) => {
             let restore_opts = RestoreOptions {
-                target_time: target_time.or(cli.target_time),
-                verbose: verbose || cli.verbose,
-                preserve_permissions: cli.preserve_permissions,
+                target_time: r_target_time.or_else(|| target_time.clone()),
+                verbose: r_verbose || verbose,
+                preserve_permissions,
             };
-            run_restore(&restore_opts, &dest, &target_out).map_err(|e| e.to_string())?;
+            let effective_dest = r_dest
+                .or_else(|| cli.dest.clone())
+                .or_else(|| cfg.as_ref().and_then(|c| c.dest.clone()))
+                .ok_or_else(|| {
+                    "Error: Backup destination directory required via argument, --dest, or --config."
+                        .to_string()
+                })?;
+            let effective_out = r_target_out
+                .or_else(|| cfg.as_ref().and_then(|c| c.target_out.clone()))
+                .ok_or_else(|| {
+                    "Error: Restore output directory required via argument or --config.".to_string()
+                })?;
+            run_restore(&restore_opts, &effective_dest, &effective_out)
+                .map_err(|e| e.to_string())?;
         }
-        Some(Commands::List { dest }) => {
-            run_list(&dest)?;
+        Some(Commands::List { dest: l_dest }) => {
+            let effective_dest = l_dest
+                .or_else(|| cli.dest.clone())
+                .or_else(|| cfg.as_ref().and_then(|c| c.dest.clone()))
+                .ok_or_else(|| {
+                    "Error: Backup destination directory required via argument, --dest, or --config."
+                        .to_string()
+                })?;
+            run_list(&effective_dest)?;
         }
     }
 

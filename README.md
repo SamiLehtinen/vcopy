@@ -123,12 +123,35 @@ vcopy /home/user/documents /home/user/photos /mnt/usb/backup
 # Single-directory flat backup (all files in root with version numbers)
 vcopy --flatten /home/user/documents /home/user/photos /mnt/usb/backup
 
-# Read source paths from a text file
-vcopy --files-from sources.txt /mnt/usb/backup
+# Read source paths from a file or standard input ('-' for stdin)
+vcopy --paths-from paths.txt /mnt/usb/backup
+find /home/user -name "*.pdf" | vcopy --paths-from - /mnt/usb/backup
+
+# Run complete backup configured from a TOML or JSON file
+vcopy -c backup.toml
 
 # Preserve Unix file modes and Windows readonly attributes
 vcopy -p /home/user/code /mnt/usb/backup
 ```
+
+### Configuration Files
+All parameters can be managed using a configuration file (`-c, --config <FILE>`) in TOML or JSON format:
+
+```toml
+# backup.toml
+sources = ["/home/user/documents", "/home/user/photos"]
+dest = "/mnt/usb/backup"
+flatten = false
+preserve_permissions = true
+verbose = true
+keep_hourly = 24
+keep_daily = 7
+keep_weekly = 4
+keep_monthly = 12
+keep_yearly = 1
+```
+
+Command-line flags and positional arguments always override settings defined in the configuration file.
 
 ### 2. Create Snapshot (Without Pruning)
 Creates a backup snapshot without running retention pruning:

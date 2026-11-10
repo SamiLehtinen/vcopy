@@ -24,6 +24,7 @@ This document provides architectural context, development workflows, and core in
 ```text
 src/
 ├── main.rs          # CLI entrypoint (clap), command routing, path validation, error handling
+├── config.rs        # TOML/JSON configuration file loader and options resolver
 ├── models.rs        # Core data structures (SnapshotManifest, FileState, FileChange, RunSummary)
 ├── sync.rs          # Hierarchical sync engine, baseline ingestion, deletion-first execution
 ├── flatten.rs       # Single-directory flat sync engine, stem collision disambiguation,

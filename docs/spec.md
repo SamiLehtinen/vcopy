@@ -224,9 +224,12 @@ Commands:
   list     List all snapshots in destination with summary statistics
 
 Options:
+  -c, --config <FILE>            Configuration file (JSON or TOML) containing all parameters
+  -d, --dest <DEST>              Destination directory (overrides positional destination or config)
+  -f, --paths-from <PATH>        Read source paths from a file or stdin ('-') (one per line, # for comments)
+                                 (aliases: --files-from, --sources-from)
       --flatten                  Single-directory flat mode (all files in destination root)
   -p, --preserve-permissions     Record and restore Unix mode and Windows readonly permissions
-      --files-from <PATH>        Read source paths from a file (one per line)
   -n, --max-versions <N>         Retain only the N newest snapshots (overrides GFS)
       --keep-hourly <N>          Hourly retention count (default: 24)
       --keep-daily <N>           Daily retention count (default: 7)
@@ -239,11 +242,32 @@ Options:
   -V, --version                  Print version information
 ```
 
+### Configuration File Support
+All parameters can be specified via a configuration file (`-c, --config <FILE>`) in either TOML or JSON format:
+
+```toml
+# vcopy.toml
+sources = ["/home/user/documents", "/home/user/photos"]
+dest = "/mnt/usb/backup"
+flatten = false
+preserve_permissions = true
+verbose = false
+dry_run = false
+max_versions = 10
+keep_hourly = 24
+keep_daily = 7
+keep_weekly = 4
+keep_monthly = 12
+keep_yearly = 1
+```
+
+Precedence: CLI command-line flags and positional arguments always override settings defined in the configuration file.
+
 ---
 
 ## 6. Test Suite & Verification
 
-The integration test suite consists of 19 automated tests:
+The integration test suite consists of 22 automated tests:
 
 * `tests/integration_tests.rs`:
   * `test_basic_backup_and_versioning`: Verifies initial mirror sync, subsequent modifications, and historical archiving.
@@ -251,7 +275,10 @@ The integration test suite consists of 19 automated tests:
   * `test_multiple_sources_mapping`: Verifies prefixed subdirectories for multi-source backups.
   * `test_multiple_sources_with_flatten`: Verifies `--flatten` mode with multiple sources.
   * `test_flatten_collisions_versioning_and_restore`: Verifies stem disambiguation, `.v0`/`.v1` monotonic versioning, and restore.
-  * `test_files_from`: Verifies source path ingestion via `--files-from`.
+  * `test_files_from`: Verifies backward compatibility of `--files-from`.
+  * `test_paths_from_file_and_stdin`: Verifies source path ingestion via `--paths-from` (files, folders, stdin `-`, and `--sources-from`).
+  * `test_config_file_toml_and_json`: Verifies full parameter ingestion via TOML and JSON configuration files.
+  * `test_config_cli_overrides`: Verifies CLI arguments override configuration file values.
   * `test_concurrency_lock`: Verifies concurrent execution blocking via `.lock`.
   * `test_no_changes_does_not_create_snapshot`: Verifies no redundant snapshots created when sources are unchanged.
   * `test_dangerous_overlapping_and_root_paths_rejected`: Verifies safety guards on root and overlapping paths.

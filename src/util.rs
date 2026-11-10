@@ -442,19 +442,32 @@ pub fn cleanup_empty_parents(file_path: &Path, stop_at_root: &Path) {
 
 pub fn parse_sources(
     sources_in: &[PathBuf],
-    files_from: Option<&PathBuf>,
+    paths_from: Option<&PathBuf>,
 ) -> std::io::Result<Vec<PathBuf>> {
     let mut resolved = Vec::new();
-    if let Some(ff) = files_from {
-        let file = File::open(ff)?;
-        let reader = BufReader::new(file);
-        for line in reader.lines() {
-            let line = line?;
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
+    if let Some(pf) = paths_from {
+        if pf.as_os_str() == "-" {
+            let stdin = io::stdin();
+            let reader = stdin.lock();
+            for line in reader.lines() {
+                let line = line?;
+                let trimmed = line.trim();
+                if trimmed.is_empty() || trimmed.starts_with('#') {
+                    continue;
+                }
+                resolved.push(PathBuf::from(trimmed));
             }
-            resolved.push(PathBuf::from(trimmed));
+        } else {
+            let file = File::open(pf)?;
+            let reader = BufReader::new(file);
+            for line in reader.lines() {
+                let line = line?;
+                let trimmed = line.trim();
+                if trimmed.is_empty() || trimmed.starts_with('#') {
+                    continue;
+                }
+                resolved.push(PathBuf::from(trimmed));
+            }
         }
     }
     for s in sources_in {
