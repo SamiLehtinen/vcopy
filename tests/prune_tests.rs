@@ -278,7 +278,7 @@ fn test_flat_pruning_and_consolidation() {
         .unwrap();
     assert!(st.success());
 
-    let flat_manifest_path = ctx.dst.join(".vcopy.json");
+    let flat_manifest_path = ctx.dst.join(".version-history.baseline.json");
     let flat_json: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&flat_manifest_path).unwrap()).unwrap();
     assert_eq!(flat_json["snapshots"].as_array().unwrap().len(), 2);

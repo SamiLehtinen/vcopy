@@ -46,9 +46,13 @@ pub fn is_safe_relative_path(rel_str: &str) -> bool {
                     || s == "."
                     || s == ".."
                     || s == ".version-history"
+                    || s == ".versionhistory"
+                    || s.starts_with(".version-history.")
+                    || s.starts_with(".versionhistory.")
                     || s == ".vcopy.json"
                     || s == ".vcopy.lock"
                     || s == ".vcopy.pid_lock"
+                    || s.starts_with(".vcopy.")
                 {
                     return false;
                 }
@@ -72,7 +76,17 @@ pub fn split_stem_ext(filename: &str) -> (&str, &str) {
 }
 
 pub fn is_reserved_flat_name(name: &str) -> bool {
-    name == ".vcopy.json"
+    name == ".version-history.baseline.json"
+        || name == ".version-history.manifest.jsonl"
+        || name == ".version-history.lock"
+        || name == ".version-history.pid_lock"
+        || name == ".versionhistory.baseline.json"
+        || name == ".versionhistory.manifest.jsonl"
+        || name == ".versionhistory.lock"
+        || name == ".versionhistory.pid_lock"
+        || name.starts_with(".version-history.")
+        || name.starts_with(".versionhistory.")
+        || name == ".vcopy.json"
         || name == ".vcopy.lock"
         || name == ".vcopy.pid_lock"
         || name.starts_with(".vcopy.")

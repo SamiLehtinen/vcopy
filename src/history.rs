@@ -84,14 +84,28 @@ pub fn unique_snapshot_name(hist_dir: &Path, preferred_name: &str) -> String {
 }
 
 pub fn is_flat_repo(dest: &Path) -> bool {
-    dest.join(".vcopy.json").is_file()
+    dest.join(".version-history.baseline.json").is_file()
+        || dest.join(".version-history.manifest.jsonl").is_file()
+        || dest.join(".versionhistory.baseline.json").is_file()
+        || dest.join(".versionhistory.manifest.jsonl").is_file()
+        || dest.join(".version-history.json").is_file()
+        || dest.join(".versionhistory.json").is_file()
+        || dest.join(".vcopy.json").is_file()
 }
 
 pub fn load_flat_manifest(dest: &Path) -> Option<crate::models::FlatManifest> {
-    let flat_path = dest.join(".vcopy.json");
-    if let Ok(file) = File::open(&flat_path) {
-        if let Ok(manifest) = serde_json::from_reader(file) {
-            return Some(manifest);
+    for name in &[
+        ".version-history.baseline.json",
+        ".versionhistory.baseline.json",
+        ".version-history.json",
+        ".versionhistory.json",
+        ".vcopy.json",
+    ] {
+        let flat_path = dest.join(name);
+        if let Ok(file) = File::open(&flat_path) {
+            if let Ok(manifest) = serde_json::from_reader(file) {
+                return Some(manifest);
+            }
         }
     }
     None
@@ -99,8 +113,11 @@ pub fn load_flat_manifest(dest: &Path) -> Option<crate::models::FlatManifest> {
 
 pub fn save_flat_manifest(dest: &Path, manifest: &crate::models::FlatManifest) -> io::Result<()> {
     fs::create_dir_all(dest)?;
-    let target_path = dest.join(".vcopy.json");
-    let tmp_path = dest.join(format!(".vcopy.json.tmp.{}", process::id()));
+    let target_path = dest.join(".version-history.baseline.json");
+    let tmp_path = dest.join(format!(
+        ".version-history.baseline.json.tmp.{}",
+        process::id()
+    ));
 
     {
         let file = File::create(&tmp_path)?;
@@ -115,6 +132,31 @@ pub fn save_flat_manifest(dest: &Path, manifest: &crate::models::FlatManifest) -
         let _ = fs::remove_file(&tmp_path);
         return Err(e);
     }
+
+    // Also write .version-history.manifest.jsonl for the append-only snapshot ledger
+    let jsonl_path = dest.join(".version-history.manifest.jsonl");
+    let tmp_jsonl = dest.join(format!(
+        ".version-history.manifest.jsonl.tmp.{}",
+        process::id()
+    ));
+
+    {
+        let mut file = File::create(&tmp_jsonl)?;
+        use std::io::Write;
+        for s in &manifest.snapshots {
+            let line = serde_json::to_string(s).map_err(io::Error::other)?;
+            writeln!(file, "{}", line)?;
+        }
+        let baseline_line = serde_json::to_string(&manifest.baseline).map_err(io::Error::other)?;
+        writeln!(file, "{}", baseline_line)?;
+        let _ = file.sync_all();
+    }
+
+    if let Err(e) = fs::rename(&tmp_jsonl, &jsonl_path) {
+        let _ = fs::remove_file(&tmp_jsonl);
+        return Err(e);
+    }
+
     Ok(())
 }
 

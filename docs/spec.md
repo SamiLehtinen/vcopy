@@ -18,7 +18,7 @@
 
 * **Zero Links:** Never creates or follows hardlinks, symlinks, or block reflinks. Safely works across external USB drives, FAT32, exFAT, network shares, and filesystems without link support.
 * **Directly Browseable Destination:** Files in the destination mirror root are always raw, uncompressed files accessible by standard OS file managers (Windows Explorer, macOS Finder, Linux file managers) without proprietary extractors.
-* **Nanosecond Timestamps & CRC32 Integrity:** Overcomes exFAT/FAT32 2-second timestamp drift by persisting exact nanosecond modification timestamps (`mtime_ns`) and SIMD-accelerated CRC32 checksums in metadata manifests (`baseline.json`, `manifest.json`, and `manifest.jsonl`).
+* **Nanosecond Timestamps & CRC32 Integrity:** Overcomes exFAT/FAT32 2-second timestamp drift by persisting exact nanosecond modification timestamps (`mtime_ns`) and SIMD-accelerated CRC32 checksums in metadata manifests (`baseline.json`, `manifest.json`, and `.version-history.manifest.jsonl`).
 * **Cross-Platform Permission Preservation (`-p / --preserve-permissions`):** Optional tracking of Unix file mode permissions and Windows/DOS readonly attributes. Persisted in snapshot manifests and restored on compatible platforms without encumbering non-POSIX filesystems.
 * **Atomic Staging Writes:** All file copies and manifest writes use temporary staging files (`.<file>.tmp.<pid>.<counter>`) and atomic renames to prevent partial corruption from power failures or abrupt termination.
 * **Strict Path & Purge Safety Guards:**
@@ -68,10 +68,9 @@ All files are stored flat inside `<destination>/` without subfolders. Live files
 ├── notes_from_work.txt                 # Disambiguated source collision
 ├── notes_from_personal.txt             # Disambiguated source collision
 ├── notes_from_personal.v0.txt          # Displaced revision of notes_from_personal.txt
-└── .version-history/
-    ├── .lock                           # Advisory concurrency lock
-    ├── baseline.json                   # Latest live state manifest
-    └── manifest.jsonl                  # Append-only ledger of all snapshot manifests
+├── .version-history.lock               # Advisory concurrency lock
+├── .version-history.baseline.json      # Latest live state manifest
+└── .version-history.manifest.jsonl     # Append-only ledger of all snapshot manifests
 ```
 
 #### Monotonic Version Naming Convention
@@ -86,7 +85,7 @@ When multiple sources contribute identical file basenames to the flat destinatio
 4. Live basenames and their historical `.v<N>` variants share the exact same disambiguated stem.
 
 #### Orphan File Scan Recovery
-If `manifest.jsonl` is damaged, missing, or out of sync:
+If `.version-history.manifest.jsonl` is damaged, missing, or out of sync:
 - `vcopy` scans destination filenames matching the `<base>.v<N>.<ext>` pattern.
 - Groups files by logical identity and reconstructs snapshot associations based on disk `mtime_ns` and CRC32 checksums.
 

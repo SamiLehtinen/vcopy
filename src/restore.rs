@@ -213,7 +213,7 @@ fn run_restore_flat(opts: &RestoreOptions, dest: &Path, target_out: &Path) -> io
     let flat_manifest = load_flat_manifest(dest).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
-            "Could not read .vcopy.json from flat destination",
+            "Could not read .version-history.baseline.json from flat destination",
         )
     })?;
 

@@ -457,7 +457,8 @@ fn test_flatten_collisions_versioning_and_restore() {
     assert!(dst.join("notes.txt").is_file());
     assert!(dst.join("notes_2.txt").is_file());
     assert!(dst.join("unique.txt").is_file());
-    assert!(dst.join(".vcopy.json").is_file());
+    assert!(dst.join(".version-history.baseline.json").is_file());
+    assert!(dst.join(".version-history.manifest.jsonl").is_file());
     assert!(!dst.join(".version-history").exists());
 
     std::thread::sleep(std::time::Duration::from_millis(1100));
@@ -501,7 +502,7 @@ fn test_flatten_collisions_versioning_and_restore() {
     assert!(!restore_out.join("dir1").join("unique.txt").exists());
 
     // 4. Restore point-in-time from initial snapshot
-    let flat_content = fs::read_to_string(dst.join(".vcopy.json")).unwrap();
+    let flat_content = fs::read_to_string(dst.join(".version-history.baseline.json")).unwrap();
     let flat_json: serde_json::Value = serde_json::from_str(&flat_content).unwrap();
     let first_snap_name = flat_json["snapshots"][0]["snapshot_name"].as_str().unwrap();
 

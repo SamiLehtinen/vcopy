@@ -18,7 +18,7 @@
 * **Dual Storage Layouts**:
   * **Hierarchical Snapshot Mode (Default)**: Keeps the live mirror at `<dest>/` and archives historical versions under dated directories in `.version-history/<YYYY-MM-DD_HHMMSS>/`.
   * **Single-Directory Flat Mode (`--flatten`)**: Keeps all files (live and historical) directly in a single destination folder using monotonic version suffixes (`.v0`, `.v1`, ...) with automatic collision disambiguation and scan recovery.
-* **Nanosecond Timestamps & SIMD CRC32**: Overcomes FAT/exFAT 2-second timestamp drift by persisting exact nanosecond modification timestamps (`mtime_ns`) and fast SIMD CRC32 hashes in `manifest.json` and `manifest.jsonl`.
+* **Nanosecond Timestamps & SIMD CRC32**: Overcomes FAT/exFAT 2-second timestamp drift by persisting exact nanosecond modification timestamps (`mtime_ns`) and fast SIMD CRC32 hashes in `manifest.json` and `.version-history.manifest.jsonl`.
 * **Optional Permission Preservation (`-p / --preserve-permissions`)**: Persists Unix file mode bits and Windows readonly attributes in metadata manifests, allowing faithful restoration across compatible filesystems without encumbering FAT32/exFAT storage.
 * **Atomic Staging Writes**: Statically writes all file copies and manifests through temporary files (`.<file>.tmp.<pid>.<id>`) and atomically renames them into place to prevent corruption upon abrupt power loss or cancellation.
 * **Safe Pruning (Reverse-Delta Consolidation)**: Pruning intermediate snapshots migrates displaced files needed by surviving older snapshots before deletion, guaranteeing point-in-time restore integrity across GFS retention cycles.
@@ -61,10 +61,9 @@ Ideal when you need all files in a single flat folder (e.g. flat USB drives, pho
 ├── notes_from_work.txt                 # Disambiguated source collision
 ├── notes_from_personal.txt             # Disambiguated source collision
 ├── notes_from_personal.v0.txt          # Historical version of notes_from_personal
-└── .version-history/
-    ├── .lock                           # Advisory lock
-    ├── baseline.json                   # Latest live state manifest
-    └── manifest.jsonl                  # Append-only snapshot ledger
+├── .version-history.lock               # Advisory lock
+├── .version-history.baseline.json      # Latest live state manifest
+└── .version-history.manifest.jsonl     # Append-only snapshot ledger
 ```
 
 ---

@@ -28,7 +28,7 @@ pub fn acquire_lock(dest: &Path) -> io::Result<BackupLock> {
 
 pub fn acquire_flat_lock(dest: &Path) -> io::Result<BackupLock> {
     fs::create_dir_all(dest)?;
-    let lock_path = dest.join(".vcopy.lock");
+    let lock_path = dest.join(".version-history.lock");
 
     let file = OpenOptions::new()
         .read(true)
@@ -43,7 +43,7 @@ pub fn acquire_flat_lock(dest: &Path) -> io::Result<BackupLock> {
             if e.kind() == io::ErrorKind::WouldBlock {
                 return Err(io::Error::new(
                     io::ErrorKind::WouldBlock,
-                    "Destination is locked by another running process (.vcopy.lock held)",
+                    "Destination is locked by another running process (.version-history.lock held)",
                 ));
             }
             let is_unsupported = match e.raw_os_error() {
@@ -60,7 +60,7 @@ pub fn acquire_flat_lock(dest: &Path) -> io::Result<BackupLock> {
 }
 
 fn acquire_flat_pid_lock(dest: &Path) -> io::Result<BackupLock> {
-    let pid_lock_path = dest.join(".vcopy.pid_lock");
+    let pid_lock_path = dest.join(".version-history.pid_lock");
     let current_pid = process::id();
 
     for _ in 0..2 {
