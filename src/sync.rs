@@ -369,6 +369,7 @@ fn run_create_standard(
                     pm
                 }
                 None => SnapshotManifest {
+                    comment: crate::models::default_manifest_comment(),
                     version: 2,
                     snapshot_name: archive_snap_name.clone(),
                     snapshot_timestamp: now_utc,
@@ -382,6 +383,7 @@ fn run_create_standard(
         }
 
         let new_baseline = SnapshotManifest {
+            comment: crate::models::default_manifest_comment(),
             version: 2,
             snapshot_name: live_snap_name.clone(),
             snapshot_timestamp: now_utc,
@@ -394,6 +396,7 @@ fn run_create_standard(
         Ok(Some(new_baseline))
     } else {
         let dry_manifest = SnapshotManifest {
+            comment: crate::models::default_manifest_comment(),
             version: 2,
             snapshot_name: live_snap_name,
             snapshot_timestamp: now_utc,
@@ -847,6 +850,7 @@ fn run_create_flat(
     );
 
     let new_baseline = SnapshotManifest {
+        comment: crate::models::default_manifest_comment(),
         version: 2,
         snapshot_name: live_snap_name.clone(),
         snapshot_timestamp: now_utc,
@@ -871,6 +875,7 @@ fn run_create_flat(
                     pm
                 }
                 None => SnapshotManifest {
+                    comment: crate::models::default_manifest_comment(),
                     version: 2,
                     snapshot_name: archive_snap_name,
                     snapshot_timestamp: now_utc,
@@ -884,6 +889,7 @@ fn run_create_flat(
         }
 
         let updated_flat_manifest = FlatManifest {
+            comment: crate::models::default_manifest_comment(),
             version: 2,
             flatten: true,
             version_counters,

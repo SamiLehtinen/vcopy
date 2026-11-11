@@ -43,8 +43,14 @@ pub struct RunSummary {
     pub bytes_transferred: u64,
 }
 
+pub fn default_manifest_comment() -> String {
+    "Created and managed by vcopy (https://github.com/samilehtinen/vcopy) - directly browseable, zero-link backup tool with point-in-time restore. Run 'vcopy restore <backup_dir> <output_dir>' to restore files.".to_string()
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct SnapshotManifest {
+    #[serde(default = "default_manifest_comment", rename = "_comment")]
+    pub comment: String,
     pub version: u32,
     #[serde(default)]
     pub snapshot_name: String,
@@ -57,6 +63,8 @@ pub struct SnapshotManifest {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct FlatManifest {
+    #[serde(default = "default_manifest_comment", rename = "_comment")]
+    pub comment: String,
     pub version: u32,
     pub flatten: bool,
     #[serde(default)]

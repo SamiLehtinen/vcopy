@@ -907,3 +907,63 @@ fn test_manual_embedded_ascii_and_markdown() {
     let stdout_sub_md = String::from_utf8_lossy(&out_sub_md.stdout);
     assert!(stdout_sub_md.contains("# VCOPY(1) User Manual"));
 }
+
+#[test]
+fn test_manifest_metadata_comment() {
+    let ctx = TestContext::new("manifest_comment");
+    ctx.write_src_file("doc.txt", b"hello manifest comment");
+
+    // 1. Run hierarchical backup
+    let st = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st.success());
+
+    // Check baseline.json has _comment near the top
+    let baseline_path = ctx.dst.join(".version-history").join("baseline.json");
+    let baseline_raw = fs::read_to_string(&baseline_path).unwrap();
+    assert!(baseline_raw.contains("\"_comment\": \"Created and managed by vcopy"));
+    assert!(baseline_raw.contains("vcopy restore"));
+
+    // Check that _comment is among the first lines
+    let first_lines: Vec<&str> = baseline_raw.lines().take(4).collect();
+    let first_joined = first_lines.join("\n");
+    assert!(first_joined.contains("\"_comment\""));
+
+    // 2. Modify and trigger historical snapshot manifest.json
+    thread::sleep(Duration::from_millis(1050));
+    ctx.write_src_file("doc.txt", b"hello manifest comment v2");
+    let st2 = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st2.success());
+
+    let snapshots: Vec<_> = fs::read_dir(ctx.dst.join(".version-history"))
+        .unwrap()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .collect();
+    assert_eq!(snapshots.len(), 1);
+    let snap_manifest_raw = fs::read_to_string(snapshots[0].path().join("manifest.json")).unwrap();
+    assert!(snap_manifest_raw.contains("\"_comment\": \"Created and managed by vcopy"));
+
+    // 3. Test flat mode manifest comment
+    let flat_dst = ctx.dir.join("dst_flat");
+    let st3 = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--flatten")
+        .arg(&ctx.src)
+        .arg(&flat_dst)
+        .status()
+        .unwrap();
+    assert!(st3.success());
+
+    let flat_baseline_raw =
+        fs::read_to_string(flat_dst.join(".version-history.baseline.json")).unwrap();
+    assert!(flat_baseline_raw.contains("\"_comment\": \"Created and managed by vcopy"));
+    let flat_first_lines: Vec<&str> = flat_baseline_raw.lines().take(4).collect();
+    assert!(flat_first_lines.join("\n").contains("\"_comment\""));
+}

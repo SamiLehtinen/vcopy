@@ -99,6 +99,7 @@ Data models are defined in `src/models.rs`.
 Authoritative snapshot manifest persisted in `baseline.json`, `<timestamp>/manifest.json`, and as line-delimited records in `manifest.jsonl`:
 ```rust
 pub struct SnapshotManifest {
+    pub _comment: String,             // Tool provenance & restore guide notice
     pub version: u32,
     pub snapshot_name: String,
     pub snapshot_timestamp: DateTime<Utc>,
@@ -315,6 +316,7 @@ The integration test suite consists of 26 automated tests:
   * `test_config_cli_overrides`: Verifies CLI arguments override configuration file values.
   * `test_cli_sources_flag`: Verifies `-s / --sources` flag on CLI.
   * `test_manual_embedded_ascii_and_markdown`: Verifies embedded documentation in ASCII, Markdown, and manual subcommands.
+  * `test_manifest_metadata_comment`: Verifies `_comment` tool provenance and restore guidance metadata in JSON manifests.
   * `test_concurrency_lock`: Verifies concurrent execution blocking via `.lock`.
   * `test_no_changes_does_not_create_snapshot`: Verifies no redundant snapshots created when sources are unchanged.
   * `test_dangerous_overlapping_and_root_paths_rejected`: Verifies safety guards on root and overlapping paths.
