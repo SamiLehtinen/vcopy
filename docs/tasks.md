@@ -1,0 +1,3 @@
+- [x] Reorganize the readme file, so that the usage stuff is first, then explanation how it works, and the tech stuff is at the end.
+- [x] Embed comprehensive manual (ASCII and Markdown) into the binary with `--manual`, `--manual-markdown`, and `manual` commands.
+- [x] Include simple examples with numbered versions and multiple sources near the top.

@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand};
 mod config;
 mod history;
 mod lock;
+mod manual;
 mod models;
 mod prune;
 mod restore;
@@ -25,7 +26,8 @@ use util::parse_sources;
     author = "Sami Lehtinen",
     version = "0.2.0",
     about = "Browseable zero-link backup tool with history",
-    long_about = "vcopy creates directly browseable, uncompressed filesystem mirrors on external drives and non-snapshotting filesystems (exFAT, FAT32, NTFS, ext4, APFS) while preserving a full historical change record in .version-history/."
+    long_about = "vcopy creates directly browseable, uncompressed filesystem mirrors on external drives and non-snapshotting filesystems (exFAT, FAT32, NTFS, ext4, APFS) while preserving a full historical change record in .version-history/.",
+    subcommand_precedence_over_arg = true
 )]
 struct Cli {
     #[command(subcommand)]
@@ -117,6 +119,14 @@ struct Cli {
     /// Save and restore file permissions in snapshot metadata (default: disabled)
     #[arg(short = 'p', long = "preserve-permissions", global = true)]
     preserve_permissions: bool,
+
+    /// Display the complete user manual in plain text / ASCII man-page format
+    #[arg(long = "manual", alias = "man", global = true)]
+    manual: bool,
+
+    /// Display the complete user manual in Markdown format
+    #[arg(long = "manual-markdown", alias = "manual-md", global = true)]
+    manual_markdown: bool,
 }
 
 #[derive(Subcommand, Debug, PartialEq, Eq)]
@@ -195,6 +205,13 @@ enum Commands {
         #[arg(value_name = "DEST")]
         dest: Option<PathBuf>,
     },
+    /// Display the comprehensive user manual (plain text or markdown)
+    #[command(alias = "man")]
+    Manual {
+        /// Output in Markdown format instead of plain ASCII
+        #[arg(long = "markdown", alias = "md")]
+        markdown: bool,
+    },
 }
 
 fn resolve_sources_and_dest(
@@ -266,6 +283,28 @@ fn resolve_sources_and_dest(
 
 fn execute() -> Result<(), String> {
     let cli = Cli::parse();
+
+    if cli.manual_markdown {
+        manual::print_manual_markdown();
+        return Ok(());
+    }
+    if cli.manual {
+        manual::print_manual_ascii();
+        return Ok(());
+    }
+
+    if cli.command.is_none() && !cli.args.is_empty() {
+        if let Some(first) = cli.args.first().and_then(|p| p.to_str()) {
+            if first == "manual" || first == "man" {
+                if cli.manual_markdown {
+                    manual::print_manual_markdown();
+                } else {
+                    manual::print_manual_ascii();
+                }
+                return Ok(());
+            }
+        }
+    }
 
     let cfg = match &cli.config {
         Some(p) => Some(crate::config::load_config(p)?),
@@ -348,6 +387,7 @@ fn execute() -> Result<(), String> {
                     target_out: None,
                 }),
                 "list" => Some(Commands::List { dest: None }),
+                "manual" | "man" => Some(Commands::Manual { markdown: false }),
                 "create" => Some(Commands::Create { paths: Vec::new() }),
                 "auto" => Some(Commands::Auto { paths: Vec::new() }),
                 _ => None,
@@ -463,6 +503,13 @@ fn execute() -> Result<(), String> {
                         .to_string()
                 })?;
             run_list(&effective_dest)?;
+        }
+        Some(Commands::Manual { markdown }) => {
+            if markdown || cli.manual_markdown {
+                manual::print_manual_markdown();
+            } else {
+                manual::print_manual_ascii();
+            }
         }
     }
 

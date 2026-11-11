@@ -1,0 +1,205 @@
+.TH VCOPY 1 "November 2026" "vcopy 0.2.0" "User Commands"
+.SH NAME
+vcopy \- directly browseable, zero-link, multi-platform backup and sync tool with historical versioning
+.SH SYNOPSIS
+.B vcopy
+[\fIOPTIONS\fR] [\fISOURCES\fR... \fIDEST\fR] [\fICOMMAND\fR]
+.br
+.B vcopy manual
+[\fB\-\-markdown\fR]
+.br
+.B vcopy
+\fB\-\-manual\fR | \fB\-\-manual-markdown\fR
+.SH DESCRIPTION
+.B vcopy
+is a lightweight, zero-dependency CLI backup and filesystem synchronization tool written in pure Rust. It creates directly browseable, uncompressed filesystem mirrors on external drives and non-snapshotting filesystems (exFAT, FAT32, NTFS, ext4, APFS) while preserving a full historical point-in-time change record.
+.PP
+The binary embeds its complete documentation in both plain text and Markdown formats, enabling standalone operation without external files.
+.SH QUICK START & SIMPLE EXAMPLES
+.SS 1. Basic Single Directory Backup
+Syncs \fI/home/user/documents\fR into \fI/mnt/usb/backup\fR:
+.PP
+.RS 4
+.nf
+$ vcopy /home/user/documents /mnt/usb/backup
+.fi
+.RE
+.PP
+Live mirror files are immediately browseable at \fI/mnt/usb/backup/documents/\fR as standard uncompressed files. Historical snapshots are archived under \fI.version-history/\fR.
+.SS 2. Multiple Sources
+Pass multiple sources positionally or with the \fB\-s\fR / \fB\-\-sources\fR flag:
+.PP
+.RS 4
+.nf
+# Positional syntax (destination is the final argument)
+$ vcopy /home/user/docs /home/user/photos /home/user/music /mnt/usb/backup
+
+# Explicit -s / --sources and -d / --dest flags
+$ vcopy -s /home/user/docs -s /home/user/photos -d /mnt/usb/backup
+
+# Read paths from a list file, glob patterns, or stdin ('-')
+$ vcopy -f project_paths.txt -d /mnt/usb/backup
+$ vcopy -f "backups_*.txt" -d /mnt/usb/backup
+$ find /home/user/code -name "*.rs" | vcopy -f - -d /mnt/usb/backup
+.fi
+.RE
+.SS 3. Numbered Versions in a Flat Directory (--flatten)
+Store all files in a single flat destination directory without nested folders. Historical revisions receive monotonic numbered version suffixes (\fI.v0\fR, \fI.v1\fR, ...):
+.PP
+.RS 4
+.nf
+$ vcopy --flatten /home/user/docs /home/user/photos /mnt/usb/backup
+.fi
+.RE
+.PP
+Destination layout with numbered versions:
+.PP
+.RS 4
+.nf
+/mnt/usb/backup/
+|-- report.pdf                     # Current live version (latest)
+|-- report.v0.pdf                  # Oldest historical version (v0)
+|-- report.v1.pdf                  # Second historical version (v1)
+|-- photo.jpg                      # Current live photo
+|-- photo.v0.jpg                   # Prior version of photo
+|-- notes_from_docs.txt            # Stem collision disambiguated
+|-- notes_from_photos.txt          # Stem collision disambiguated
+|-- notes_from_photos.v0.txt       # Historical version of notes
+|-- .version-history.lock          # Advisory concurrency lock
+|-- .version-history.baseline.json # Live state manifest & checksums
+`-- .version-history.manifest.jsonl# Append-only snapshot ledger
+.fi
+.RE
+.SS 4. Zero-Obfuscation Configuration Files (-c / --config)
+A configuration file uses the \fBexact same command-line flags and parameters\fR:
+.PP
+.RS 4
+.nf
+$ vcopy -c backup.conf
+.fi
+.RE
+.PP
+Direct CLI arguments format (\fIbackup.conf\fR):
+.PP
+.RS 4
+.nf
+# backup.conf - exact same flags as the command line!
+--sources /home/user/documents
+--sources /home/user/photos
+--dest /mnt/usb/backup
+--flatten
+--preserve-permissions
+--keep-daily 7
+--keep-weekly 4
+.fi
+.RE
+.SS 5. Listing Snapshots
+.PP
+.RS 4
+.nf
+$ vcopy list /mnt/usb/backup
+.fi
+.RE
+.SS 6. Point-in-Time Restore
+.PP
+.RS 4
+.nf
+# Restore latest mirror state
+$ vcopy restore /mnt/usb/backup /tmp/restored
+
+# Restore files as of a specific snapshot timestamp
+$ vcopy restore --target-time 2026-11-09_083000 /mnt/usb/backup /tmp/restored
+.fi
+.RE
+.SS 7. Retention & Snapshot Pruning
+.PP
+.RS 4
+.nf
+# Retain newest 5 snapshots
+$ vcopy prune -n 5 /mnt/usb/backup
+
+# Retain 24 hourly, 7 daily, 4 weekly, 12 monthly, 1 yearly
+$ vcopy prune --keep-hourly 24 --keep-daily 7 --keep-weekly 4 /mnt/usb/backup
+
+# Dry run: preview actions without modifying files
+$ vcopy prune -n 5 --dry-run -v /mnt/usb/backup
+.fi
+.RE
+.SH OPTIONS
+.TP
+.BR \-s ", " \-\-sources " " \fIPATH\fR
+Explicit source directory or file. Can be specified multiple times or comma-separated. Alias: \fB\-\-source\fR.
+.TP
+.BR \-d ", " \-\-dest " " \fIPATH\fR
+Destination backup directory. Overrides positional destination. Alias: \fB\-\-destination\fR.
+.TP
+.BR \-f ", " \-\-paths-from " " \fIPATTERN_OR_STDIN\fR
+Read source paths from a file, glob pattern, or stdin (\fB\-\fR). Can be specified multiple times. Aliases: \fB\-\-files-from\fR, \fB\-\-sources-from\fR.
+.TP
+.BR \-c ", " \-\-config " " \fIFILE\fR
+Path to configuration file (direct CLI arguments format, key-value, TOML, or JSON).
+.TP
+.BR \-\-flatten
+Single-directory flat mode: stores all live and historical files in root using \fI.v0\fR, \fI.v1\fR version numbers.
+.TP
+.BR \-p ", " \-\-preserve-permissions
+Record POSIX file modes (Unix) and readonly attributes (Windows) in manifests and restore them.
+.TP
+.BR \-\-dry-run
+Perform a trial run without making any filesystem modifications.
+.TP
+.BR \-v ", " \-\-verbose
+Print detailed information about copied, modified, and deleted files.
+.TP
+.BR \-\-target-time " " \fITIMESTAMP\fR
+Snapshot timestamp (\fIYYYY-MM-DD_HHMMSS\fR or prefix) or \fIlatest\fR for restore.
+.TP
+.BR \-\-manual ", " \-\-man
+Display the comprehensive user manual in plain text / ASCII man-page format.
+.TP
+.BR \-\-manual-markdown ", " \-\-manual-md ", " \-\-markdown
+Display the comprehensive user manual in Markdown format.
+.SH RETENTION POLICY OPTIONS
+.TP
+.BR \-n ", " \-\-max-versions " " \fIN\fR
+Retain only the newest \fIN\fR snapshots (overrides GFS retention).
+.TP
+.BR \-\-keep-hourly " " \fIN\fR
+Number of hourly snapshot buckets to retain (default: 24).
+.TP
+.BR \-\-keep-daily " " \fIN\fR
+Number of daily snapshot buckets to retain (default: 7).
+.TP
+.BR \-\-keep-weekly " " \fIN\fR
+Number of weekly snapshot buckets to retain (default: 4).
+.TP
+.BR \-\-keep-monthly " " \fIN\fR
+Number of monthly snapshot buckets to retain (default: 12).
+.TP
+.BR \-\-keep-yearly " " \fIN\fR
+Number of yearly snapshot buckets to retain (default: 1).
+.SH SUBCOMMANDS
+.TP
+.B auto
+(Default) Synchronize sources and automatically prune old snapshots.
+.TP
+.B create
+Create a backup snapshot without pruning.
+.TP
+.B restore
+Restore files to a target directory from a snapshot.
+.TP
+.B list
+List all snapshots in destination with summary metrics.
+.TP
+.B prune
+Manually prune snapshots according to retention rules.
+.TP
+.B manual
+Display the user manual. Use \fB\-\-markdown\fR for Markdown format.
+.SH AUTHORS
+Written by Sami Lehtinen <noreply@sami-lehtinen.net>.
+.SH LICENSE
+Released under the Zero-Clause BSD (0BSD) License.
+.SH SEE ALSO
+GitHub: <https://github.com/samilehtinen/vcopy>

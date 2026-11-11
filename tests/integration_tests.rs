@@ -862,3 +862,48 @@ fn test_cli_sources_flag() {
         b"flag sources content"
     );
 }
+
+#[test]
+fn test_manual_embedded_ascii_and_markdown() {
+    // 1. Test --manual flag
+    let out = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--manual")
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("VCOPY(1)"));
+    assert!(stdout.contains("QUICK START & SIMPLE EXAMPLES"));
+    assert!(stdout.contains("Numbered Versions in a Flat Directory (--flatten)"));
+    assert!(stdout.contains("Zero-Obfuscation Configuration Files"));
+
+    // 2. Test --manual-markdown flag
+    let out_md = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--manual-markdown")
+        .output()
+        .unwrap();
+    assert!(out_md.status.success());
+    let stdout_md = String::from_utf8_lossy(&out_md.stdout);
+    assert!(stdout_md.contains("# VCOPY(1) User Manual"));
+    assert!(stdout_md.contains("## QUICK START & SIMPLE EXAMPLES"));
+    assert!(stdout_md.contains("## PARAMETER & OPTIONS REFERENCE"));
+
+    // 3. Test 'manual' subcommand
+    let out_sub = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("manual")
+        .output()
+        .unwrap();
+    assert!(out_sub.status.success());
+    let stdout_sub = String::from_utf8_lossy(&out_sub.stdout);
+    assert!(stdout_sub.contains("VCOPY(1)"));
+
+    // 4. Test 'manual --markdown' subcommand
+    let out_sub_md = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("manual")
+        .arg("--markdown")
+        .output()
+        .unwrap();
+    assert!(out_sub_md.status.success());
+    let stdout_sub_md = String::from_utf8_lossy(&out_sub_md.stdout);
+    assert!(stdout_sub_md.contains("# VCOPY(1) User Manual"));
+}

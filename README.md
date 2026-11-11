@@ -9,24 +9,332 @@
 
 `vcopy` is a lightweight, zero-dependency CLI backup tool written in pure Rust. It creates directly browseable, uncompressed filesystem mirrors on external drives and non-snapshotting filesystems (exFAT, FAT32, NTFS, ext4, APFS) while preserving a full historical change record.
 
----
-
-## Key Features & Invariants
-
-* **Directly Browseable Destination**: Live mirror files remain raw, uncompressed, and directly readable in any file manager (Windows Explorer, Finder, Dolphin, etc.) without proprietary backup readers or archive extractors.
-* **Zero Links**: Never creates or follows hardlinks, symlinks, or block reflinks. Operates safely across FAT32, exFAT, external USB drives, and cloud-synced folders.
-* **Dual Storage Layouts**:
-  * **Hierarchical Snapshot Mode (Default)**: Keeps the live mirror at `<dest>/` and archives historical versions under dated directories in `.version-history/<YYYY-MM-DD_HHMMSS>/`.
-  * **Single-Directory Flat Mode (`--flatten`)**: Keeps all files (live and historical) directly in a single destination folder using monotonic version suffixes (`.v0`, `.v1`, ...) with automatic collision disambiguation and scan recovery.
-* **Nanosecond Timestamps & SIMD CRC32**: Overcomes FAT/exFAT 2-second timestamp drift by persisting exact nanosecond modification timestamps (`mtime_ns`) and fast SIMD CRC32 hashes in `manifest.json` and `.version-history.manifest.jsonl`.
-* **Optional Permission Preservation (`-p / --preserve-permissions`)**: Persists Unix file mode bits and Windows readonly attributes in metadata manifests, allowing faithful restoration across compatible filesystems without encumbering FAT32/exFAT storage.
-* **Atomic Staging Writes**: Statically writes all file copies and manifests through temporary files (`.<file>.tmp.<pid>.<id>`) and atomically renames them into place to prevent corruption upon abrupt power loss or cancellation.
-* **Safe Pruning (Reverse-Delta Consolidation)**: Pruning intermediate snapshots migrates displaced files needed by surviving older snapshots before deletion, guaranteeing point-in-time restore integrity across GFS retention cycles.
-* **Non-Blocking Resilient Advisory Locking**: Uses advisory locking (`.version-history/.lock`) to block overlapping concurrent runs, falling back automatically to an atomic PID-file lock on filesystems that do not support POSIX `flock`.
+The binary embeds its complete documentation in both plain text and Markdown formats, enabling full standalone operation without external manuals or extra files.
 
 ---
 
-## Storage Modes
+## Simple Examples & Quick Start
+
+### 1. Basic Single Directory Backup
+Syncs `/home/user/documents` into `/mnt/usb/backup`:
+
+```bash
+vcopy /home/user/documents /mnt/usb/backup
+```
+Your current files are immediately browseable in `/mnt/usb/backup/documents/` as regular, uncompressed files. Historical snapshots are archived under `.version-history/`.
+
+---
+
+### 2. Multiple Sources
+Pass multiple source directories or files positionally or with the `-s / --sources` flag:
+
+**Positional multiple sources (destination is always the final argument):**
+```bash
+vcopy /home/user/docs /home/user/photos /home/user/music /mnt/usb/backup
+```
+Distinct top-level source folders are mirrored in the destination:
+```text
+/mnt/usb/backup/
+├── docs/
+├── photos/
+└── music/
+```
+
+**Using explicit `-s / --sources` and `-d / --dest` flags:**
+```bash
+vcopy -s /home/user/docs -s /home/user/photos -d /mnt/usb/backup
+```
+
+**Reading sources from files, wildcards, or stdin (`-f / --paths-from`):**
+```bash
+# Read paths from a list file (one path per line, # for comments)
+vcopy -f project_paths.txt -d /mnt/usb/backup
+
+# Read paths matching glob patterns
+vcopy -f "backups_*.txt" -d /mnt/usb/backup
+
+# Pipe paths directly from find or stdin ('-')
+find /home/user/code -name "*.rs" | vcopy -f - -d /mnt/usb/backup
+```
+
+---
+
+### 3. Numbered Versions in a Flat Directory (`--flatten`)
+When you want all files in a single flat folder without nested subfolders (ideal for flat USB thumb drives, camera ingest dropboxes, or single-folder cloud storage), use `--flatten`.
+
+Every file is placed directly in the destination root. Historical revisions receive monotonic numbered version suffixes (`.v0`, `.v1`, `.v2`, ...):
+
+```bash
+vcopy --flatten /home/user/docs /home/user/photos /mnt/usb/backup
+```
+
+**Destination structure with numbered versions:**
+```text
+/mnt/usb/backup/
+├── report.pdf                     # Current live version (latest)
+├── report.v0.pdf                  # Oldest historical version (v0)
+├── report.v1.pdf                  # Second historical version (v1)
+├── photo.jpg                      # Current live photo
+├── photo.v0.jpg                   # Prior version of photo
+├── notes_from_docs.txt            # Stem collision disambiguated by source
+├── notes_from_photos.txt          # Stem collision disambiguated by source
+├── notes_from_photos.v0.txt       # Historical version of notes_from_photos
+├── .version-history.lock          # Advisory concurrency lock
+├── .version-history.baseline.json # Live state manifest & checksums
+└── .version-history.manifest.jsonl# Append-only snapshot ledger
+```
+
+---
+
+### 4. Zero-Obfuscation Configuration Files (`-c / --config`)
+No separate manual or syntax to learn! A configuration file can literally contain the **exact same command-line flags and parameters** you already type in the terminal:
+
+```bash
+vcopy -c backup.conf
+```
+
+**Direct CLI arguments format (`backup.conf`):**
+```text
+# backup.conf - exact same flags as the command line!
+--sources /home/user/documents
+--sources /home/user/photos
+--dest /mnt/usb/backup
+--flatten
+--preserve-permissions
+--keep-daily 7
+--keep-weekly 4
+```
+
+**Simple key-value format (`backup.conf`):**
+```text
+dest = /mnt/usb/backup
+sources = /home/user/documents, /home/user/photos
+flatten = true
+preserve-permissions = true
+keep-daily = 7
+keep-weekly = 4
+```
+
+---
+
+### 5. Listing Snapshots
+View historical snapshots, transfer statistics, and timestamps:
+```bash
+vcopy list /mnt/usb/backup
+```
+Example output:
+```text
+Snapshot                   Copied     Modified   Deleted    Transferred    
+---------------------------------------------------------------------------
+2026-11-09_083000          142        0          0          12491024 bytes 
+2026-11-09_091500          3          12         1          452010 bytes   
+2026-11-09_100000 (live)   0          0          0          0 bytes        
+```
+
+---
+
+### 6. Point-in-Time Restore
+Restore files to an exact prior snapshot or the latest mirror:
+
+```bash
+# Restore latest mirror state
+vcopy restore /mnt/usb/backup /tmp/restored
+
+# Restore files from a specific snapshot timestamp
+vcopy restore --target-time 2026-11-09_083000 /mnt/usb/backup /tmp/restored
+
+# Restore with POSIX permissions and Windows readonly attributes
+vcopy restore -p --target-time 2026-11-09_083000 /mnt/usb/backup /tmp/restored
+```
+
+---
+
+### 7. Retention & Snapshot Pruning
+Prune old snapshots using count limits or Grandfather-Father-Son (GFS) policies:
+
+```bash
+# Keep only the newest 5 snapshots
+vcopy prune -n 5 /mnt/usb/backup
+
+# Retain 24 hourly, 7 daily, 4 weekly, 12 monthly, and 1 yearly snapshots
+vcopy prune --keep-hourly 24 --keep-daily 7 --keep-weekly 4 /mnt/usb/backup
+
+# Preview pruning actions without deleting files (dry run)
+vcopy prune -n 5 --dry-run -v /mnt/usb/backup
+```
+
+---
+
+## Parameters & CLI Options Reference
+
+```text
+vcopy [OPTIONS] [SOURCES... DEST]... [COMMAND]
+```
+
+### Core Options
+
+| Option | Value | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `-s, --sources` | `<PATH>` | None | Explicit source directory or file. Can be specified multiple times or comma-separated. *(Alias: `--source`)* |
+| `-d, --dest` | `<PATH>` | None | Destination backup directory (overrides positional destination or config setting). *(Alias: `--destination`)* |
+| `-f, --paths-from` | `<PATTERN>` or `-` | None | Read source paths from text file, file glob (e.g. `backups*`), or stdin (`-`). Can be specified multiple times or comma-separated. *(Aliases: `--files-from`, `--sources-from`)* |
+| `-c, --config` | `<FILE>` | None | Path to configuration file. Accepts direct CLI arguments format (exact same flags/args as command line), key-value, TOML, or JSON. |
+| `--flatten` | Flag | `false` | Single-directory flat mode: stores all live and historical files in root using `.v0`, `.v1` version numbers. |
+| `-p, --preserve-permissions` | Flag | `false` | Record POSIX file modes (Unix) and readonly attributes (Windows) in manifests and restore them. |
+| `--dry-run` | Flag | `false` | Simulate execution and display planned operations without modifying the filesystem. |
+| `-v, --verbose` | Flag | `false` | Print detailed information about copied, modified, and deleted files. |
+| `--target-time` | `<TIMESTAMP>` | `latest` | Point-in-time timestamp (`YYYY-MM-DD_HHMMSS` or prefix) for `restore`. |
+| `--manual` | Flag | | Print the complete user manual in ASCII / man-page format. *(Alias: `--man`)* |
+| `--manual-markdown` | Flag | | Print the complete user manual in Markdown format. *(Aliases: `--manual-md`, `--markdown`)* |
+
+### Retention Policy Options (GFS & Count)
+
+| Option | Shorthand | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `--max-versions` | `-n` | None | Retain only the newest $N$ snapshots (overrides GFS). |
+| `--keep-hourly` | | 24 | Retain one snapshot per hour for the past $N$ hours. |
+| `--keep-daily` | | 7 | Retain one snapshot per day for the past $N$ days. |
+| `--keep-weekly` | | 4 | Retain one snapshot per week for the past $N$ weeks. |
+| `--keep-monthly` | | 12 | Retain one snapshot per month for the past $N$ months. |
+| `--keep-yearly` | | 1 | Retain one snapshot per year for the past $N$ years. |
+
+---
+
+## Embedded Manual & Documentation
+
+Because `vcopy` is distributed as a single static binary, its entire documentation is embedded right inside the executable at compile time. You never have to worry about missing manuals:
+
+```bash
+# Display the comprehensive ASCII manual (terminal / man-page format)
+vcopy --manual
+# or via subcommand
+vcopy manual
+
+# Dump the full Markdown manual to stdout or a file
+vcopy --manual-markdown > manual.md
+# or via subcommand
+vcopy manual --markdown > README.md
+```
+
+A standard UNIX man page is also included at [`docs/vcopy.1`](docs/vcopy.1) and can be installed via `man docs/vcopy.1` or copied to `/usr/local/share/man/man1/`.
+
+---
+
+## CLI Subcommands Reference
+
+- **`auto`** *(default when no subcommand is specified)*:
+  Synchronizes source directories into destination, creates a timestamped snapshot, and automatically runs GFS retention pruning.
+  ```bash
+  vcopy /source /dest
+  vcopy auto /source /dest
+  ```
+- **`create`**:
+  Creates a backup snapshot without running retention pruning:
+  ```bash
+  vcopy create /source /dest
+  ```
+- **`restore`**:
+  Restores files from destination to a specified target directory from `latest` or `--target-time <TIMESTAMP>`:
+  ```bash
+  vcopy restore /dest /output_dir
+  vcopy restore --target-time 2026-11-09_083000 /dest /output_dir
+  ```
+- **`list`**:
+  Displays all historical snapshots, transfer statistics, and timestamps:
+  ```bash
+  vcopy list /dest
+  ```
+- **`prune`**:
+  Manually prunes historical snapshots according to retention rules with reverse-delta consolidation:
+  ```bash
+  vcopy prune -n 5 /dest
+  vcopy prune --keep-daily 7 --keep-weekly 4 /dest
+  ```
+- **`manual`**:
+  Displays the built-in documentation:
+  ```bash
+  vcopy manual              # ASCII man-page text
+  vcopy manual --markdown   # Full Markdown guide
+  ```
+
+---
+
+## Configuration Files (Zero-Obfuscation)
+
+You do **not** need to learn a separate manual or format to write a configuration file. A configuration file can literally contain the exact command-line flags and arguments you already use on the CLI:
+
+### Option 1: Direct CLI Arguments Format (`.conf` or `.args`)
+Write flags and paths exactly as you would type them in the terminal (one per line or space-separated; `#` for comments):
+
+```text
+# backup.conf - exact same flags as the command line!
+--sources /home/user/documents
+--sources /home/user/photos
+--dest /mnt/usb/backup
+--flatten
+--preserve-permissions
+--keep-daily 7
+--keep-weekly 4
+```
+
+Positional paths can also be listed directly:
+```text
+# backup.conf
+/home/user/documents
+/home/user/photos
+--dest /mnt/usb/backup
+--flatten
+--keep-daily 7
+```
+
+### Option 2: Simple Key-Value Format
+Write plain unquoted `key = value` lines matching the exact CLI flag names:
+
+```text
+# backup.conf
+dest = /mnt/usb/backup
+sources = /home/user/documents, /home/user/photos
+flatten = true
+preserve-permissions = true
+keep-daily = 7
+keep-weekly = 4
+```
+
+### Option 3: TOML or JSON Format
+The exact same CLI option names (kebab-case or snake_case) work identically in TOML or JSON:
+
+```toml
+# backup.toml - uses exact CLI parameter names!
+dest = "/mnt/usb/backup"
+sources = ["/home/user/documents", "/home/user/photos"]
+flatten = true
+preserve-permissions = true
+verbose = true
+keep-hourly = 24
+keep-daily = 7
+keep-weekly = 4
+keep-monthly = 12
+keep-yearly = 1
+```
+
+```json
+{
+  "dest": "/mnt/usb/backup",
+  "sources": ["/home/user/documents", "/home/user/photos"],
+  "flatten": true,
+  "preserve-permissions": true,
+  "keep-daily": 7,
+  "keep-weekly": 4
+}
+```
+
+Command-line flags and positional arguments always override settings defined in any configuration file.
+
+---
+
+## How It Works & Storage Layouts
+
+`vcopy` provides two distinct storage layouts optimized for different operational environments:
 
 ### 1. Hierarchical Snapshot Mode (Default)
 Ideal for traditional backups where the directory tree is preserved and displaced files are archived into dated snapshot subdirectories:
@@ -68,9 +376,20 @@ Ideal when you need all files in a single flat folder (e.g. flat USB drives, pho
 
 ---
 
+## Technical Invariants & Safety Guarantees
+
+* **Zero Links**: Never creates or follows hardlinks, symlinks, or block reflinks. Operates safely across FAT32, exFAT, external USB drives, and cloud-synced folders.
+* **Directly Browseable Destination**: Live mirror files remain raw, uncompressed, and directly readable in any standard OS file manager without proprietary archive extractors.
+* **Atomic Staging Writes**: Writes all file copies and manifests through temporary files (`.<file>.tmp.<pid>.<id>`) and atomically renames them into place to prevent corruption upon abrupt power loss or cancellation.
+* **Nanosecond Timestamps & SIMD CRC32**: Overcomes FAT/exFAT 2-second timestamp drift by persisting exact nanosecond modification timestamps (`mtime_ns`) and fast SIMD CRC32 hashes in metadata manifests.
+* **Safe Pruning (Reverse-Delta Consolidation)**: Pruning intermediate snapshots migrates displaced files needed by surviving older snapshots before deletion, guaranteeing point-in-time restore integrity across GFS retention cycles.
+* **Non-Blocking Resilient Advisory Locking**: Uses advisory locking (`.version-history/.lock` or `.version-history.lock`) to block overlapping concurrent runs, falling back automatically to an atomic PID-file lock on filesystems that do not support POSIX `flock` (e.g. FUSE mounts).
+
+---
+
 ## Installation & Pre-Built Binaries
 
-Pre-compiled standalone static binaries for release `v0.2.0` are available on the [GitHub Releases](https://github.com/samilehtinen/vcopy/releases) page for the following targets:
+Pre-compiled standalone static binaries for release `v0.2.0` are available on the [GitHub Releases](https://github.com/samilehtinen/vcopy/releases) page:
 
 | Platform | Architecture | Target Triple | Binary Name |
 | :--- | :--- | :--- | :--- |
@@ -103,189 +422,10 @@ cargo test
 
 ---
 
-## CLI Usage & Commands
-
-```text
-vcopy [OPTIONS] [SOURCES... DEST]... [COMMAND]
-```
-
-### 1. Default (Auto Backup & Prune)
-Executes a backup snapshot and automatically applies retention policies:
-
-```bash
-# Backup single directory
-vcopy /home/user/documents /mnt/usb/backup
-
-# Backup multiple directories into prefixed folders
-vcopy /home/user/documents /home/user/photos /mnt/usb/backup
-
-# Single-directory flat backup (all files in root with version numbers)
-vcopy --flatten /home/user/documents /home/user/photos /mnt/usb/backup
-
-# Read source paths from files, glob masks, or standard input ('-' for stdin)
-vcopy --paths-from paths.txt /mnt/usb/backup
-vcopy -f list1.txt -f list2.txt /mnt/usb/backup
-vcopy -f "backups*" /mnt/usb/backup
-find /home/user -name "*.pdf" | vcopy --paths-from - /mnt/usb/backup
-
-# Run complete backup configured from a configuration file (CLI flags, key-value, TOML, or JSON)
-vcopy -c backup.conf
-
-# Preserve Unix file modes and Windows readonly attributes
-vcopy -p /home/user/code /mnt/usb/backup
-```
-
-### Configuration Files (Zero-Obfuscation: Uses the Exact Same CLI Syntax)
-
-You do **not** need to learn a separate manual or format to write a configuration file. A configuration file can literally contain the exact command-line flags and arguments you already use on the CLI:
-
-#### Option 1: Direct CLI Arguments Format (`.conf` or `.args`)
-Write flags and paths exactly as you would type them in the terminal (one per line or space-separated; `#` for comments):
-
-```text
-# backup.conf - exact same flags as the command line!
---sources /home/user/documents
---sources /home/user/photos
---dest /mnt/usb/backup
---flatten
---preserve-permissions
---keep-daily 7
---keep-weekly 4
-```
-
-Positional paths can also be listed directly:
-```text
-# backup.conf
-/home/user/documents
-/home/user/photos
---dest /mnt/usb/backup
---flatten
---keep-daily 7
-```
-
-#### Option 2: Simple Key-Value Format
-Write plain unquoted `key = value` lines matching the exact CLI flag names:
-
-```text
-# backup.conf
-dest = /mnt/usb/backup
-sources = /home/user/documents, /home/user/photos
-flatten = true
-preserve-permissions = true
-keep-daily = 7
-keep-weekly = 4
-```
-
-#### Option 3: TOML or JSON Format
-If you prefer TOML or JSON, the exact same CLI option names (kebab-case or snake_case) work identically:
-
-```toml
-# backup.toml - uses exact CLI parameter names!
-dest = "/mnt/usb/backup"
-sources = ["/home/user/documents", "/home/user/photos"]
-flatten = true
-preserve-permissions = true
-verbose = true
-keep-hourly = 24
-keep-daily = 7
-keep-weekly = 4
-keep-monthly = 12
-keep-yearly = 1
-```
-
-```json
-{
-  "dest": "/mnt/usb/backup",
-  "sources": ["/home/user/documents", "/home/user/photos"],
-  "flatten": true,
-  "preserve-permissions": true,
-  "keep-daily": 7,
-  "keep-weekly": 4
-}
-```
-
-Command-line flags and positional arguments always override settings defined in any configuration file.
-
-### 2. Create Snapshot (Without Pruning)
-Creates a backup snapshot without running retention pruning:
-```bash
-vcopy create /path/to/src /mnt/usb/backup
-```
-
-### 3. Listing Snapshots
-Displays all historical snapshots, transfer statistics, and timestamps:
-```bash
-vcopy list /mnt/usb/backup
-```
-Example output:
-```text
-Snapshot               Copied     Modified   Deleted    Transferred    
-----------------------------------------------------------------------
-2026-11-09_083015      142        0          0          12491024 bytes 
-2026-11-09_091520      3          12         1          452010 bytes   
-```
-
-### 4. Point-in-Time Restore
-Restores the full state of your files from a specific snapshot or the latest live mirror:
-
-```bash
-# Restore latest mirror state
-vcopy restore /mnt/usb/backup /path/to/restored
-
-# Restore from a specific point in time (timestamp or prefix)
-vcopy restore --target-time 2026-11-09_083015 /mnt/usb/backup /path/to/restored
-
-# Restore with permission restoration
-vcopy restore -p --target-time 2026-11-09_083015 /mnt/usb/backup /path/to/restored
-```
-
-### 5. Snapshot Pruning & Retention
-Manually prune old snapshots using count-based or Grandfather-Father-Son (GFS) policies:
-
-```bash
-# Keep only the newest 5 snapshots
-vcopy prune -n 5 /mnt/usb/backup
-
-# Custom GFS retention schedule
-vcopy prune --keep-hourly 24 --keep-daily 7 --keep-weekly 4 --keep-monthly 12 /mnt/usb/backup
-
-# Preview pruning actions without deleting files (dry run)
-vcopy prune -n 5 --dry-run -v /mnt/usb/backup
-```
-
----
-
-## CLI Options Reference
-
-| Option | Value | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `-c, --config` | `<FILE>` | None | Path to configuration file containing backup settings. Accepts direct CLI arguments format (exact same flags/args as command line), key-value, TOML, or JSON. |
-| `-s, --sources` | `<SOURCE>` | None | Explicit source directory or file paths (can be specified multiple times or comma-separated). *(Alias: `--source`)* |
-| `-d, --dest` | `<DEST>` | None | Destination directory (overrides positional destination or config setting). *(Alias: `--destination`)* |
-| `-f, --paths-from` | `<PATTERN>` or `-` | None | Read source paths (files or directories) from file, glob pattern (e.g. `backups*`), or stdin (`-`). Can be specified multiple times or comma-separated. *(Aliases: `--files-from`, `--sources-from`)* |
-| `--flatten` | Flag | `false` | Single-directory flat mode (all live and historical files stored in destination root). |
-| `-p, --preserve-permissions` | Flag | `false` | Record and restore POSIX file permissions and Windows readonly attributes. |
-| `--dry-run` | Flag | `false` | Simulate execution and display planned actions without modifying disk. |
-| `-v, --verbose` | Flag | `false` | Enable detailed output for copied, modified, and deleted files. |
-| `--target-time` | `<TIMESTAMP>` | `latest` | Point-in-time timestamp (`YYYY-MM-DD_HHMMSS` or prefix) for `restore`. |
-
----
-
-## Retention Policy (GFS & Count)
-
-| Flag | Default | Description |
-| :--- | :--- | :--- |
-| `-n, --max-versions <N>` | None | Retains only the newest $N$ snapshots (overrides GFS). |
-| `--keep-hourly <N>` | 24 | Retains one snapshot per hour for the past $N$ hours. |
-| `--keep-daily <N>` | 7 | Retains one snapshot per day for the past $N$ days. |
-| `--keep-weekly <N>` | 4 | Retains one snapshot per week for the past $N$ weeks. |
-| `--keep-monthly <N>` | 12 | Retains one snapshot per month for the past $N$ months. |
-| `--keep-yearly <N>` | 1 | Retains one snapshot per year for the past $N$ years. |
-
----
-
 ## Documentation & Developer Resources
 
+* [User Manual (`docs/MANUAL.md`)](docs/MANUAL.md): Comprehensive Markdown user guide (also embedded in the binary via `vcopy --manual-markdown`).
+* [UNIX Man Page (`docs/vcopy.1`)](docs/vcopy.1): Standard troff man page for Unix/Linux man systems.
 * [Engineering Specification (`docs/spec.md`)](docs/spec.md): Complete architecture specification, data schema, collision disambiguation, scan recovery, and verification details.
 * [Agent Guidelines (`AGENTS.md`)](AGENTS.md): Environment configuration, cross-compilation instructions, and coding invariants for AI coding agents.
 

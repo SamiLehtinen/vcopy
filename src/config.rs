@@ -429,7 +429,9 @@ pub fn parse_cli_or_keyval_config(content: &str) -> Result<ConfigFile, String> {
                 let v = get_val(&mut i, inline_val)?;
                 cfg.command = Some(v);
             }
-            "auto" | "create" | "prune" | "restore" | "list" if !tok.starts_with('-') => {
+            "auto" | "create" | "prune" | "restore" | "list" | "manual" | "man"
+                if !tok.starts_with('-') =>
+            {
                 cfg.command = Some(tok.to_string());
             }
             _ => {

@@ -221,6 +221,7 @@ Commands:
   prune    Prune old snapshots according to retention policy
   restore  Restore files from a specific snapshot or point in time
   list     List all snapshots in destination with summary statistics
+  manual   Display the comprehensive user manual (plain text or markdown)
 
 Options:
   -c, --config <FILE>            Configuration file (CLI flags, key-value, TOML, or JSON)
@@ -239,6 +240,8 @@ Options:
       --keep-yearly <N>          Yearly retention count (default: 1)
       --dry-run                  Simulate actions without writing or deleting files
   -v, --verbose                  Enable detailed execution logging
+      --manual                   Display the comprehensive user manual in plain text / ASCII man-page format
+      --manual-markdown          Display the comprehensive user manual in Markdown format
   -h, --help                     Print help information
   -V, --version                  Print version information
 ```
@@ -311,6 +314,7 @@ The integration test suite consists of 26 automated tests:
   * `test_config_key_value_and_kebab_case`: Verifies configuration files written in unquoted key-value format with exact kebab-case CLI names.
   * `test_config_cli_overrides`: Verifies CLI arguments override configuration file values.
   * `test_cli_sources_flag`: Verifies `-s / --sources` flag on CLI.
+  * `test_manual_embedded_ascii_and_markdown`: Verifies embedded documentation in ASCII, Markdown, and manual subcommands.
   * `test_concurrency_lock`: Verifies concurrent execution blocking via `.lock`.
   * `test_no_changes_does_not_create_snapshot`: Verifies no redundant snapshots created when sources are unchanged.
   * `test_dangerous_overlapping_and_root_paths_rejected`: Verifies safety guards on root and overlapping paths.
