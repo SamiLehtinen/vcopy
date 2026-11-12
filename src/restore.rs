@@ -21,10 +21,47 @@ static RESTORE_COPY_COUNTER: AtomicU64 = AtomicU64::new(0);
 #[derive(Debug, Clone)]
 pub struct RestoreOptions {
     pub target_time: Option<String>,
+    pub filter: Option<String>,
     pub verbose: bool,
     pub preserve_permissions: bool,
     pub force: bool,
     pub allow_existing: bool,
+}
+
+pub fn matches_restore_filter(rel_path: &str, filter: &str) -> bool {
+    let clean_rel = rel_path.trim_matches('/');
+    let clean_filt = filter.trim_matches('/');
+
+    if clean_filt.is_empty() {
+        return true;
+    }
+
+    // 1. Exact match
+    if clean_rel == clean_filt {
+        return true;
+    }
+
+    // 2. Directory prefix match (e.g. filter "docs" matches "docs/guide.md")
+    let prefix = format!("{}/", clean_filt);
+    if clean_rel.starts_with(&prefix) {
+        return true;
+    }
+
+    // 3. Glob matching
+    if let Ok(pat) = glob::Pattern::new(clean_filt) {
+        if pat.matches(clean_rel) {
+            return true;
+        }
+        // If filter is basename only (e.g. "*.pdf"), match basename of rel_path
+        if !clean_filt.contains('/') {
+            let basename = clean_rel.rsplit('/').next().unwrap_or(clean_rel);
+            if pat.matches(basename) {
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 pub fn run_restore(opts: &RestoreOptions, dest: &Path, target_out: &Path) -> io::Result<()> {
@@ -38,7 +75,13 @@ pub fn run_restore(opts: &RestoreOptions, dest: &Path, target_out: &Path) -> io:
     let target_time_str = opts.target_time.as_deref().unwrap_or("latest");
 
     if target_time_str == "latest" {
-        return restore_latest(dest, target_out, opts.verbose, opts.preserve_permissions);
+        return restore_latest(
+            dest,
+            target_out,
+            opts.filter.as_deref(),
+            opts.verbose,
+            opts.preserve_permissions,
+        );
     }
 
     let snapshots = list_snapshots(dest)?;
@@ -52,7 +95,13 @@ pub fn run_restore(opts: &RestoreOptions, dest: &Path, target_out: &Path) -> io:
             && is_newer_than_history
             && target_time_str == baseline.snapshot_name.as_str()
         {
-            return restore_latest(dest, target_out, opts.verbose, opts.preserve_permissions);
+            return restore_latest(
+                dest,
+                target_out,
+                opts.filter.as_deref(),
+                opts.verbose,
+                opts.preserve_permissions,
+            );
         }
     }
 
@@ -92,6 +141,12 @@ pub fn run_restore(opts: &RestoreOptions, dest: &Path, target_out: &Path) -> io:
     for state in &manifest.state {
         if !is_safe_relative_path(&state.path) {
             continue;
+        }
+
+        if let Some(ref filt) = opts.filter {
+            if !matches_restore_filter(&state.path, filt) {
+                continue;
+            }
         }
 
         let out_file = target_out.join(&state.path);
@@ -172,6 +227,7 @@ pub fn run_restore(opts: &RestoreOptions, dest: &Path, target_out: &Path) -> io:
 fn restore_latest(
     dest: &Path,
     target_out: &Path,
+    filter: Option<&str>,
     verbose: bool,
     preserve_permissions: bool,
 ) -> io::Result<()> {
@@ -194,6 +250,12 @@ fn restore_latest(
         }
         if entry.file_type().is_file() {
             if let Ok(rel) = path.strip_prefix(dest) {
+                let rel_str = crate::util::normalize_rel_path(rel);
+                if let Some(filt) = filter {
+                    if !matches_restore_filter(&rel_str, filt) {
+                        continue;
+                    }
+                }
                 let out_file = target_out.join(rel);
                 let counter = RESTORE_COPY_COUNTER.fetch_add(1, Ordering::Relaxed);
                 copy_atomic(path, &out_file, pid, counter)?;
@@ -304,6 +366,13 @@ fn restore_flat_manifest(
     for state in states {
         if !is_safe_relative_path(&state.path) {
             continue;
+        }
+
+        if let Some(ref filt) = opts.filter {
+            let stored = state.stored_name.as_deref().unwrap_or(&state.path);
+            if !matches_restore_filter(&state.path, filt) && !matches_restore_filter(stored, filt) {
+                continue;
+            }
         }
 
         let out_file = target_out.join(&state.path);
@@ -501,4 +570,30 @@ fn scan_recover_hierarchical_file(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_matches_restore_filter() {
+        assert!(matches_restore_filter(
+            "documents/report.pdf",
+            "documents/report.pdf"
+        ));
+        assert!(matches_restore_filter("documents/report.pdf", "documents"));
+        assert!(matches_restore_filter("documents/report.pdf", "documents/"));
+        assert!(matches_restore_filter(
+            "documents/sub/report.pdf",
+            "documents"
+        ));
+        assert!(!matches_restore_filter("other/report.pdf", "documents"));
+
+        // Glob matching
+        assert!(matches_restore_filter("documents/report.pdf", "*.pdf"));
+        assert!(!matches_restore_filter("documents/report.txt", "*.pdf"));
+        assert!(matches_restore_filter("docs/guide.md", "docs/*.md"));
+        assert!(!matches_restore_filter("other/guide.md", "docs/*.md"));
+    }
 }

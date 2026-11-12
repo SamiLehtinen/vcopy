@@ -5,6 +5,12 @@ vcopy \- directly browseable, zero-link, multi-platform backup and sync tool wit
 .B vcopy
 [\fIOPTIONS\fR] [\fISOURCES\fR... \fIDEST\fR] [\fICOMMAND\fR]
 .br
+.B vcopy restore
+[\fIOPTIONS\fR] \fIDEST\fR \fITARGET_DIR\fR [\fIPATH_OR_PATTERN\fR]
+.br
+.B vcopy verify
+[\fIOPTIONS\fR] \fIDEST\fR
+.br
 .B vcopy manual
 [\fB\-\-markdown\fR]
 .br
@@ -87,20 +93,20 @@ Direct CLI arguments format (\fIbackup.conf\fR):
 --sources /home/user/documents
 --sources /home/user/photos
 --dest /mnt/usb/backup
---flatten
---preserve-permissions
---keep-daily 7
---keep-weekly 4
+--flat
+--perms
+--daily 7
+--weekly 4
 .fi
 .RE
-.SS 5. Listing Snapshots
+.SS 5. Listing Snapshots (list / ls)
 .PP
 .RS 4
 .nf
-$ vcopy list /mnt/usb/backup
+$ vcopy ls /mnt/usb/backup
 .fi
 .RE
-.SS 6. Point-in-Time Restore
+.SS 6. Point-in-Time & Partial Restore
 .PP
 .RS 4
 .nf
@@ -108,10 +114,23 @@ $ vcopy list /mnt/usb/backup
 $ vcopy restore /mnt/usb/backup /tmp/restored
 
 # Restore files as of a specific snapshot timestamp
-$ vcopy restore --target-time 2026-11-09_083000 /mnt/usb/backup /tmp/restored
+$ vcopy restore -t 2026-11-09_083000 /mnt/usb/backup /tmp/restored
+
+# Restore a single file or subtree
+$ vcopy restore /mnt/usb/backup /tmp/restored documents/report.pdf
+$ vcopy restore -i "*.pdf" /mnt/usb/backup /tmp/restored
 .fi
 .RE
-.SS 7. Retention & Snapshot Pruning
+.SS 7. Integrity Verification (verify / check)
+.PP
+.RS 4
+.nf
+# Verify destination files against recorded CRC32 checksums
+$ vcopy verify /mnt/usb/backup
+$ vcopy check --quick /mnt/usb/backup
+.fi
+.RE
+.SS 8. Retention & Snapshot Pruning
 .PP
 .RS 4
 .nf
@@ -119,7 +138,7 @@ $ vcopy restore --target-time 2026-11-09_083000 /mnt/usb/backup /tmp/restored
 $ vcopy prune -n 5 /mnt/usb/backup
 
 # Retain 24 hourly, 7 daily, 4 weekly, 12 monthly, 1 yearly
-$ vcopy prune --keep-hourly 24 --keep-daily 7 --keep-weekly 4 /mnt/usb/backup
+$ vcopy prune --hourly 24 --daily 7 --weekly 4 /mnt/usb/backup
 
 # Dry run: preview actions without modifying files
 $ vcopy prune -n 5 --dry-run -v /mnt/usb/backup
@@ -139,20 +158,47 @@ Read source paths from a file, glob pattern, or stdin (\fB\-\fR). Can be specifi
 .BR \-c ", " \-\-config " " \fIFILE\fR
 Path to configuration file (direct CLI arguments format, key-value, TOML, or JSON).
 .TP
-.BR \-\-flatten
+.BR \-e ", " \-\-exclude " " \fIPATTERN\fR
+Exclude files or directories matching glob pattern (e.g. \fI*.tmp\fR, \fItarget/\fR). Can be specified multiple times.
+.TP
+.BR \-\-exclude-from " " \fIFILE\fR
+Read exclude patterns from a file (one per line, e.g. \fI.gitignore\fR). Can be specified multiple times.
+.TP
+.BR \-\-flat ", " \-\-flatten
 Single-directory flat mode: stores all live and historical files in root using \fI.v0\fR, \fI.v1\fR version numbers.
 .TP
-.BR \-p ", " \-\-preserve-permissions
+.BR \-\-flat-date
+Flat mode using timestamped versions (\fI<stem>.<TIMESTAMP>.<ext>\fR) instead of monotonic version numbers.
+.TP
+.BR \-i ", " \-\-include ", " \-\-filter " " \fIPATTERN\fR
+Filter files to restore matching glob pattern or subdirectory path.
+.TP
+.BR \-\-quick
+Fast verification mode for \fBverify\fR: checks file existence, size, and mtime without recomputing CRC32.
+.TP
+.BR \-p ", " \-\-perms ", " \-\-preserve-permissions
 Record POSIX file modes (Unix) and readonly attributes (Windows) in manifests and restore them.
+.TP
+.BR \-t ", " \-\-time ", " \-\-target-time " " \fITIMESTAMP\fR
+Snapshot timestamp (\fIYYYY-MM-DD_HHMMSS\fR or prefix) or \fIlatest\fR for restore and verify.
+.TP
+.BR \-F ", " \-\-force
+Force execution, bypassing safety circuit breakers (100% loss, foreign directory, missing source).
+.TP
+.BR \-\-allow-existing
+Allow destination or restore output directory to contain pre-existing foreign files.
+.TP
+.BR \-\-allow-empty-source
+Allow empty source without tripping the 100% deletion safety circuit breaker.
+.TP
+.BR \-\-allow-missing-source
+Allow missing source paths without aborting the backup run.
 .TP
 .BR \-\-dry-run
 Perform a trial run without making any filesystem modifications.
 .TP
 .BR \-v ", " \-\-verbose
 Print detailed information about copied, modified, and deleted files.
-.TP
-.BR \-\-target-time " " \fITIMESTAMP\fR
-Snapshot timestamp (\fIYYYY-MM-DD_HHMMSS\fR or prefix) or \fIlatest\fR for restore.
 .TP
 .BR \-\-manual ", " \-\-man
 Display the comprehensive user manual in plain text / ASCII man-page format.
@@ -164,19 +210,19 @@ Display the comprehensive user manual in Markdown format.
 .BR \-n ", " \-\-max-versions " " \fIN\fR
 Retain only the newest \fIN\fR snapshots (overrides GFS retention).
 .TP
-.BR \-\-keep-hourly " " \fIN\fR
+.BR \-\-keep-hourly ", " \-\-hourly " " \fIN\fR
 Number of hourly snapshot buckets to retain (default: 24).
 .TP
-.BR \-\-keep-daily " " \fIN\fR
+.BR \-\-keep-daily ", " \-\-daily " " \fIN\fR
 Number of daily snapshot buckets to retain (default: 7).
 .TP
-.BR \-\-keep-weekly " " \fIN\fR
+.BR \-\-keep-weekly ", " \-\-weekly " " \fIN\fR
 Number of weekly snapshot buckets to retain (default: 4).
 .TP
-.BR \-\-keep-monthly " " \fIN\fR
+.BR \-\-keep-monthly ", " \-\-monthly " " \fIN\fR
 Number of monthly snapshot buckets to retain (default: 12).
 .TP
-.BR \-\-keep-yearly " " \fIN\fR
+.BR \-\-keep-yearly ", " \-\-yearly " " \fIN\fR
 Number of yearly snapshot buckets to retain (default: 1).
 .SH SUBCOMMANDS
 .TP
@@ -187,13 +233,16 @@ Number of yearly snapshot buckets to retain (default: 1).
 Create a backup snapshot without pruning.
 .TP
 .B restore
-Restore files to a target directory from a snapshot.
+Restore files to a target directory from a snapshot or mirror. Accepts an optional path or glob pattern filter.
 .TP
-.B list
-List all snapshots in destination with summary metrics.
+.BR verify ", " check
+Verify integrity of destination files against recorded SIMD CRC32 hashes to detect bit-rot or corruptions.
+.TP
+.BR list ", " ls
+List all snapshots in destination with summary metrics and human-readable transferred sizes.
 .TP
 .B prune
-Manually prune snapshots according to retention rules.
+Manually prune snapshots according to retention rules with reverse-delta consolidation.
 .TP
 .B manual
 Display the user manual. Use \fB\-\-markdown\fR for Markdown format.

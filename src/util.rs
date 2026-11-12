@@ -75,20 +75,57 @@ pub fn split_stem_ext(filename: &str) -> (&str, &str) {
     }
 }
 
-/// Parses a versioned flat filename such as "notes.v1.txt" into the base filename
-/// ("notes.txt") and the version counter (1).
+pub fn parse_timestamp_segment(s: &str) -> Option<u64> {
+    if s.len() != 17 {
+        return None;
+    }
+    let b = s.as_bytes();
+    if b[4] != b'-' || b[7] != b'-' || b[10] != b'_' {
+        return None;
+    }
+    if !b[0..4].iter().all(u8::is_ascii_digit)
+        || !b[5..7].iter().all(u8::is_ascii_digit)
+        || !b[8..10].iter().all(u8::is_ascii_digit)
+        || !b[11..13].iter().all(u8::is_ascii_digit)
+        || !b[13..15].iter().all(u8::is_ascii_digit)
+        || !b[15..17].iter().all(u8::is_ascii_digit)
+    {
+        return None;
+    }
+    let digits = format!(
+        "{}{}{}{}{}{}",
+        &s[0..4],
+        &s[5..7],
+        &s[8..10],
+        &s[11..13],
+        &s[13..15],
+        &s[15..17]
+    );
+    digits.parse::<u64>().ok()
+}
+
+/// Parses a versioned flat filename such as "notes.v1.txt" or "notes.2026-11-12_143000.txt"
+/// into the base filename ("notes.txt") and the version counter/timestamp.
 /// Supports extensions, compound extensions, and extensionless files (e.g. "script.v2").
 pub fn parse_version_filename(filename: &str) -> Option<(String, u64)> {
     if !is_safe_flat_filename(filename) {
         return None;
     }
     let (stem, ext) = split_stem_ext(filename);
+
     // Case 1: filename has extension, and stem ends with .v<N> (e.g. "notes.v1.txt")
     if let Some(v_idx) = stem.rfind(".v") {
         let version_str = &stem[v_idx + 2..];
         if !version_str.is_empty() && version_str.chars().all(|c| c.is_ascii_digit()) {
             if let Ok(version_num) = version_str.parse::<u64>() {
-                let base_stem = &stem[..v_idx];
+                let mut base_stem = &stem[..v_idx];
+                // Check if base_stem itself ends with a timestamp (e.g. "notes.2026-11-12_143000.v1.txt")
+                if base_stem.len() > 18
+                    && base_stem.as_bytes()[base_stem.len() - 18] == b'.'
+                    && parse_timestamp_segment(&base_stem[base_stem.len() - 17..]).is_some()
+                {
+                    base_stem = &base_stem[..base_stem.len() - 18];
+                }
                 if !base_stem.is_empty() {
                     let base_name = format!("{}{}", base_stem, ext);
                     return Some((base_name, version_num));
@@ -96,16 +133,46 @@ pub fn parse_version_filename(filename: &str) -> Option<(String, u64)> {
             }
         }
     }
+
     // Case 2: filename has no trailing extension, so split_stem_ext treated .v<N> as ext (e.g. "script.v10")
     if let Some(version_str) = ext.strip_prefix(".v") {
         if !version_str.is_empty() && version_str.chars().all(|c| c.is_ascii_digit()) {
             if let Ok(version_num) = version_str.parse::<u64>() {
-                if !stem.is_empty() {
-                    return Some((stem.to_string(), version_num));
+                let mut base_stem = stem;
+                if base_stem.len() > 18
+                    && base_stem.as_bytes()[base_stem.len() - 18] == b'.'
+                    && parse_timestamp_segment(&base_stem[base_stem.len() - 17..]).is_some()
+                {
+                    base_stem = &base_stem[..base_stem.len() - 18];
+                }
+                if !base_stem.is_empty() {
+                    return Some((base_stem.to_string(), version_num));
                 }
             }
         }
     }
+
+    // Case 3: filename has extension, and stem ends with .<YYYY-MM-DD_HHMMSS> (e.g. "notes.2026-11-12_143000.txt")
+    if stem.len() > 18 && stem.as_bytes()[stem.len() - 18] == b'.' {
+        let ts_str = &stem[stem.len() - 17..];
+        if let Some(ts_val) = parse_timestamp_segment(ts_str) {
+            let base_stem = &stem[..stem.len() - 18];
+            if !base_stem.is_empty() {
+                let base_name = format!("{}{}", base_stem, ext);
+                return Some((base_name, ts_val));
+            }
+        }
+    }
+
+    // Case 4: extensionless file whose split_stem_ext treated .<YYYY-MM-DD_HHMMSS> as ext (e.g. "script.2026-11-12_143000")
+    if let Some(ts_str) = ext.strip_prefix('.') {
+        if let Some(ts_val) = parse_timestamp_segment(ts_str) {
+            if !stem.is_empty() {
+                return Some((stem.to_string(), ts_val));
+            }
+        }
+    }
+
     None
 }
 
@@ -793,9 +860,71 @@ pub fn build_mappings(sources: &[PathBuf], flatten: bool) -> Vec<SourceMapping> 
     map
 }
 
+#[allow(clippy::manual_is_multiple_of)]
+pub fn format_thousand_sep(n: u64) -> String {
+    let s = n.to_string();
+    let mut result = String::new();
+    let len = s.len();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (len - i) % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    result
+}
+
+pub fn format_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        return format!("{} B", bytes);
+    }
+    const UNITS: [&str; 5] = ["KB", "MB", "GB", "TB", "PB"];
+    let mut val = bytes as f64 / 1024.0;
+    let mut unit_idx = 0;
+    while val >= 1024.0 && unit_idx < UNITS.len() - 1 {
+        val /= 1024.0;
+        unit_idx += 1;
+    }
+    format!(
+        "{:.1} {} ({} B)",
+        val,
+        UNITS[unit_idx],
+        format_thousand_sep(bytes)
+    )
+}
+
+#[allow(dead_code)]
+pub fn format_size_compact(bytes: u64) -> String {
+    if bytes < 1024 {
+        return format!("{} B", bytes);
+    }
+    const UNITS: [&str; 5] = ["KB", "MB", "GB", "TB", "PB"];
+    let mut val = bytes as f64 / 1024.0;
+    let mut unit_idx = 0;
+    while val >= 1024.0 && unit_idx < UNITS.len() - 1 {
+        val /= 1024.0;
+        unit_idx += 1;
+    }
+    format!("{:.1} {}", val, UNITS[unit_idx])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_format_size() {
+        assert_eq!(format_thousand_sep(0), "0");
+        assert_eq!(format_thousand_sep(999), "999");
+        assert_eq!(format_thousand_sep(1000), "1,000");
+        assert_eq!(format_thousand_sep(12491024), "12,491,024");
+
+        assert_eq!(format_size(0), "0 B");
+        assert_eq!(format_size(512), "512 B");
+        assert_eq!(format_size(1024), "1.0 KB (1,024 B)");
+        assert_eq!(format_size(12491024), "11.9 MB (12,491,024 B)");
+        assert_eq!(format_size_compact(12491024), "11.9 MB");
+    }
 
     #[test]
     fn test_parse_version_filename() {
@@ -818,6 +947,20 @@ mod tests {
         assert_eq!(
             parse_version_filename("my.v1.file.v2.txt"),
             Some(("my.v1.file.txt".to_string(), 2))
+        );
+
+        // Date-based versions
+        assert_eq!(
+            parse_version_filename("notes.2026-11-12_143000.txt"),
+            Some(("notes.txt".to_string(), 20261112143000))
+        );
+        assert_eq!(
+            parse_version_filename("script.2026-11-12_143000"),
+            Some(("script".to_string(), 20261112143000))
+        );
+        assert_eq!(
+            parse_version_filename("report.2026-11-12_143000.v2.pdf"),
+            Some(("report.pdf".to_string(), 2))
         );
 
         // Non-versioned files

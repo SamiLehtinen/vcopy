@@ -144,6 +144,15 @@ pub struct ConfigFile {
 
     #[serde(
         default,
+        alias = "flat-date",
+        alias = "flat_date",
+        alias = "flat-dates",
+        alias = "--flat-date"
+    )]
+    pub flat_date: Option<bool>,
+
+    #[serde(
+        default,
         alias = "preserve-permissions",
         alias = "preserve_permissions",
         alias = "permissions",
@@ -181,6 +190,24 @@ pub struct ConfigFile {
         alias = "--allow-missing-source"
     )]
     pub allow_missing_source: Option<bool>,
+
+    #[serde(
+        default,
+        alias = "exclude",
+        alias = "excludes",
+        alias = "ignore",
+        alias = "--exclude",
+        alias = "-e"
+    )]
+    pub exclude: Option<PathsValue>,
+
+    #[serde(
+        default,
+        alias = "exclude-from",
+        alias = "exclude_from",
+        alias = "--exclude-from"
+    )]
+    pub exclude_from: Option<PathsValue>,
 
     #[serde(
         default,
@@ -235,6 +262,26 @@ impl ConfigFile {
                     .map(|p| p.to_string_lossy().to_string())
                     .collect()
             })
+            .unwrap_or_default()
+    }
+
+    pub fn get_excludes(&self) -> Vec<String> {
+        self.exclude
+            .as_ref()
+            .map(|s| {
+                s.clone()
+                    .into_vec()
+                    .into_iter()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn get_exclude_from(&self) -> Vec<PathBuf> {
+        self.exclude_from
+            .as_ref()
+            .map(|s| s.clone().into_vec())
             .unwrap_or_default()
     }
 }
@@ -305,6 +352,8 @@ pub fn parse_cli_or_keyval_config(content: &str) -> Result<ConfigFile, String> {
     let mut positional = Vec::new();
     let mut explicit_sources = Vec::new();
     let mut explicit_paths_from = Vec::new();
+    let mut explicit_excludes = Vec::new();
+    let mut explicit_exclude_from = Vec::new();
 
     let mut i = 0;
     while i < raw_tokens.len() {
@@ -355,6 +404,18 @@ pub fn parse_cli_or_keyval_config(content: &str) -> Result<ConfigFile, String> {
                     explicit_paths_from.push(PathBuf::from(p));
                 }
             }
+            "exclude" | "excludes" | "ignore" | "e" => {
+                let v = get_val(&mut i, inline_val)?;
+                for p in v.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                    explicit_excludes.push(PathBuf::from(p));
+                }
+            }
+            "exclude-from" | "exclude_from" | "ignore-from" | "ignore_from" => {
+                let v = get_val(&mut i, inline_val)?;
+                for p in v.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                    explicit_exclude_from.push(PathBuf::from(p));
+                }
+            }
             "flatten" | "flat" => {
                 if let Some(v) = inline_val {
                     cfg.flatten = Some(v.parse::<bool>().unwrap_or(true));
@@ -371,6 +432,24 @@ pub fn parse_cli_or_keyval_config(content: &str) -> Result<ConfigFile, String> {
                     cfg.flatten = Some(raw_tokens[i] == "true");
                 } else {
                     cfg.flatten = Some(true);
+                }
+            }
+            "flat-date" | "flat_date" | "flat-dates" => {
+                if let Some(v) = inline_val {
+                    cfg.flat_date = Some(v.parse::<bool>().unwrap_or(true));
+                } else if i + 1 < raw_tokens.len()
+                    && (raw_tokens[i + 1] == "true" || raw_tokens[i + 1] == "false")
+                {
+                    i += 1;
+                    cfg.flat_date = Some(raw_tokens[i] == "true");
+                } else if i + 2 < raw_tokens.len()
+                    && raw_tokens[i + 1] == "="
+                    && (raw_tokens[i + 2] == "true" || raw_tokens[i + 2] == "false")
+                {
+                    i += 2;
+                    cfg.flat_date = Some(raw_tokens[i] == "true");
+                } else {
+                    cfg.flat_date = Some(true);
                 }
             }
             "preserve-permissions" | "preserve_permissions" | "permissions" | "perms" | "p" => {
@@ -553,7 +632,8 @@ pub fn parse_cli_or_keyval_config(content: &str) -> Result<ConfigFile, String> {
                 let v = get_val(&mut i, inline_val)?;
                 cfg.command = Some(v);
             }
-            "auto" | "create" | "prune" | "restore" | "list" | "ls" | "manual" | "man"
+            "auto" | "create" | "prune" | "restore" | "list" | "ls" | "verify" | "check"
+            | "manual" | "man"
                 if !tok.starts_with('-') =>
             {
                 cfg.command = Some(tok.to_string());
@@ -585,6 +665,12 @@ pub fn parse_cli_or_keyval_config(content: &str) -> Result<ConfigFile, String> {
     }
     if !explicit_paths_from.is_empty() {
         cfg.paths_from = Some(PathsValue::Multiple(explicit_paths_from));
+    }
+    if !explicit_excludes.is_empty() {
+        cfg.exclude = Some(PathsValue::Multiple(explicit_excludes));
+    }
+    if !explicit_exclude_from.is_empty() {
+        cfg.exclude_from = Some(PathsValue::Multiple(explicit_exclude_from));
     }
 
     Ok(cfg)

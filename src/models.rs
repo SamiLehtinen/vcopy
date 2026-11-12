@@ -57,6 +57,8 @@ pub struct SnapshotManifest {
     pub snapshot_timestamp: DateTime<Utc>,
     pub sources: Vec<SourceMapping>,
     pub summary: RunSummary,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub excludes: Vec<String>,
     pub changes: Vec<FileChange>,
     pub state: Vec<FileState>,
 }

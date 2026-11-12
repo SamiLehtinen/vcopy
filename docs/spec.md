@@ -61,7 +61,7 @@ The live files mirror the source layout at `<destination>/`. Displaced historica
 
 ### 2.2 Mode 2: Single-Directory Flat Mode (`--flat`)
 
-All files are stored flat inside `<destination>/` without subfolders. Live files use their base names (with collision disambiguation where needed), and displaced versions receive monotonic version numbers (`.v0`, `.v1`, ...).
+All files are stored flat inside `<destination>/` without subfolders. Live files use their base names (with collision disambiguation where needed), and displaced versions receive monotonic version numbers (`.v0`, `.v1`, ...) or full snapshot timestamps when `--flat-date` is enabled.
 
 ```text
 <destination>/
@@ -76,9 +76,13 @@ All files are stored flat inside `<destination>/` without subfolders. Live files
 └── .version-history.manifest.jsonl     # Append-only ledger of all snapshot manifests
 ```
 
-#### Monotonic Version Naming Convention
-- Files with extensions: `<stem>.v<N>.<ext>` (e.g., `document.v0.docx`, `document.v1.docx`).
-- Files without extensions: `<name>.v<N>` (e.g., `Makefile.v0`, `Makefile.v1`).
+#### Monotonic Version Naming Convention & GFS Retention
+- Monotonic numbered versions (default):
+  - Files with extensions: `<stem>.v<N>.<ext>` (e.g., `document.v0.docx`, `document.v1.docx`).
+  - Files without extensions: `<name>.v<N>` (e.g., `Makefile.v0`, `Makefile.v1`).
+- Monotonic stability: Numbered versions increment strictly upwards and are **never renamed** when older or intermediate snapshots are pruned. Renaming version numbers on disk (e.g., shifting `.v3` to `.v2`) would cause massive metadata writes and directory table fragmentation on FAT32 and exFAT filesystems. Instead, snapshots retain immutable mappings in `.version-history.manifest.jsonl`.
+- Timestamped revisions (`--flat-date`):
+  - When `--flat-date` is active, historical versions are named directly with their snapshot timestamp: `<stem>.<YYYY-MM-DD_HHMMSS>.<ext>` (e.g., `report.2026-11-09_083000.pdf`).
 
 #### Collision Disambiguation Strategy
 When multiple sources contribute identical file basenames to the flat destination:
@@ -89,8 +93,8 @@ When multiple sources contribute identical file basenames to the flat destinatio
 
 #### Orphan File Scan Recovery
 If `.version-history.manifest.jsonl` is damaged, missing, or out of sync:
-- `vcopy` scans destination filenames matching the `<base>.v<N>.<ext>` pattern.
-- Groups files by logical identity and reconstructs snapshot associations based on disk `mtime_ns` and CRC32 checksums.
+- `vcopy` scans destination filenames matching both the `<base>.v<N>.<ext>` and `<base>.<YYYY-MM-DD_HHMMSS>.<ext>` patterns.
+- Groups files by logical identity and reconstructs snapshot associations based on disk `mtime_ns` and CRC32 checksums without risk of datetime arithmetic overflow.
 
 ---
 
@@ -107,6 +111,7 @@ pub struct SnapshotManifest {
     pub snapshot_name: String,
     pub snapshot_timestamp: DateTime<Utc>,
     pub sources: Vec<SourceMapping>,
+    pub excludes: Vec<String>,
     pub summary: RunSummary,
     pub changes: Vec<FileChange>,
     pub state: Vec<FileState>,
@@ -165,35 +170,37 @@ pub struct SourceMapping {
 ### 4.1 Sync Engine (`src/sync.rs` & `src/flatten.rs`)
 
 1. **Path Validation & Lock Acquisition:** Validates source and destination paths via `validate_sync_paths` and acquires an exclusive advisory lock on `.version-history/.lock` (with PID fallback).
-2. **Baseline Ingestion:** Loads `baseline.json` (or reads the latest record from `manifest.jsonl` in flat mode). If no manifest exists and `dest` contains preexisting files, scans `dest` to establish an initial baseline.
-3. **Change Detection:** Computes differences by comparing source file metadata (`size`, `mtime_ns`, and `crc32`) against baseline entries:
+2. **Exclude Filter Processing:** Constructs `ExcludeFilter` combining command-line patterns (`-e / --exclude`), files (`--exclude-from`), and auto-discovered `.vcopyignore` files in source trees. Excluded files and directories are pruned from the directory walk and active pattern rules are stored in `manifest.excludes`.
+3. **Baseline Ingestion:** Loads `baseline.json` (or reads the latest record from `manifest.jsonl` in flat mode). If no manifest exists and `dest` contains preexisting files, scans `dest` to establish an initial baseline.
+4. **Change Detection:** Computes differences by comparing source file metadata (`size`, `mtime_ns`, and `crc32`) against baseline entries:
    - **New:** File present in source, absent in baseline. Copied to destination via atomic staging.
    - **Modified:** File present in both, but `size`, `mtime_ns`, or `crc32` differs. Prior version is archived, and new version copied via atomic staging.
    - **Deleted:** Baseline entry absent from current source paths. Archived or tagged as deleted.
    - **Restored Missing:** Baseline entry matches source, but file is missing from destination disk. Re-copied atomically (self-healing).
-4. **Hierarchical Archiving Execution:**
+5. **Hierarchical Archiving Execution:**
    - Deleted files in destination are moved to `.version-history/<archive_snap>/<path>` and marked with zero-byte `<path>.deleted`. Empty parent directories in `dest` are cleaned up.
    - Modified files are moved from `dest/<path>` to `.version-history/<archive_snap>/<path>`.
-5. **Flat Archiving Execution:**
-   - In `--flatten` mode, historical revisions are retained directly in `<destination>/` using the next available monotonic index `<name>.v<next>.<ext>`.
-   - Modifying a file moves the existing live `<name>.<ext>` to `<name>.v<next>.<ext>`, then writes the new file as `<name>.<ext>`.
-   - Deleted files in flat mode retain their existing `.v<N>` revisions in `<dest>/` while the live `<name>.<ext>` file is removed.
+6. **Flat Archiving Execution:**
+   - In `--flat` mode, historical revisions are retained directly in `<destination>/` using monotonic indices `<stem>.v<next>.<ext>` or snapshot timestamps `<stem>.<TIMESTAMP>.<ext>` if `--flat-date` is enabled.
+   - Modifying a file moves the existing live `<stem>.<ext>` to the versioned filename, then writes the new file as `<stem>.<ext>`.
+   - Deleted files in flat mode retain their existing versioned revisions in `<dest>/` while the live `<stem>.<ext>` file is removed.
    - Appends the snapshot record to `.version-history/manifest.jsonl`.
-6. **Manifest Persistence:**
+7. **Manifest Persistence:**
    - On initial sync into an empty destination, writes `baseline.json` without creating an empty snapshot folder.
    - On subsequent syncs with changes, writes the archived snapshot manifest and updates `baseline.json`.
    - In flat mode, also appends the manifest record to `manifest.jsonl`.
    - If zero changes are detected, no files or manifests are written.
 
-### 4.2 Point-in-Time Restore Engine (`src/restore.rs`)
+### 4.2 Point-in-Time & Partial Restore Engine (`src/restore.rs`)
 
 * **Path Validation:** Rejects overlapping restore destination paths (`target_out == dest`, `target_out` inside `dest`, or `dest` inside `target_out`).
-* **Latest Restore:** When restoring `"latest"`, restores the current live mirror files directly to `target_out/` and applies original nanosecond timestamps and permissions (if preserved).
+* **Partial Restore Filtering:** Supports optional positional path/pattern or `-i, --include` / `--filter` glob. Matches against full relative paths, directory prefixes, and glob wildcards (`matches_restore_filter`), allowing single file or subtree extraction.
+* **Latest Restore:** When restoring `"latest"`, restores matching live mirror files directly to `target_out/` and applies original nanosecond timestamps and permissions (if preserved).
 * **Historical Point-in-Time Restore:**
   1. Identifies the closest snapshot $S_k$ at or prior to `--target-time`.
-  2. For each file in $S_k\text{.manifest.state}$:
+  2. For each matching file in $S_k\text{.manifest.state}$:
      - **Hierarchical Mode:** Searches historical snapshots chronologically starting from $S_k$ for the first displaced file at `<path>`. If never displaced, reads the untouched file from the live mirror `dest/<path>`.
-     - **Flat Mode:** Uses the recorded filename in `manifest.jsonl` or queries the scan recovery engine to resolve the exact version file (`<stem>.v<N>.<ext>` or live `<stem>.<ext>`) matching the snapshot timestamp and CRC32.
+     - **Flat Mode:** Uses the recorded filename in `manifest.jsonl` or queries the scan recovery engine to resolve the exact version file (`<stem>.v<N>.<ext>`, `<stem>.<TIMESTAMP>.<ext>`, or live `<stem>.<ext>`) matching the snapshot timestamp and CRC32.
   3. Writes files atomically to `target_out/` and sets exact nanosecond modification timestamps via `set_file_mtime`. On Unix platforms, restores file mode bits if `-p` metadata is present.
 
 ### 4.3 Pruning & Retention Engine (`src/prune.rs`)
@@ -206,7 +213,17 @@ pub struct SourceMapping {
   - In flat mode, historical version files are consolidated and re-indexed to prevent gaps while preserving point-in-time integrity for all surviving snapshots.
   - Any I/O failure during consolidation aborts pruning before any directory removal.
 
-### 4.4 Resilient Advisory Locking (`src/lock.rs`)
+### 4.4 Integrity Verification & Bit-Rot Detection (`src/verify.rs`)
+
+* Subcommands: `vcopy verify` and `vcopy check`.
+* Compares physical destination files against recorded manifests (`baseline.json`, `<snapshot>/manifest.json`, and `.version-history.manifest.jsonl`).
+* Modes:
+  - **Full (default):** Recomputes SIMD-accelerated CRC32 checksums on disk and compares against manifest values, detecting bit-rot, silent data corruption, or unauthorized tampering.
+  - **Quick (`--quick`):** Compares file existence, size in bytes, and nanosecond modification timestamps without reading file payloads.
+* Visual Reporting: Summarizes verified files, corrupted/mismatched files (displaying expected vs. actual CRC32), missing files, and untracked orphan files.
+* Returns non-zero process exit code if any corruption or missing file is detected.
+
+### 4.5 Resilient Advisory Locking (`src/lock.rs`)
 
 * Attempts non-blocking advisory locking (`try_lock_exclusive`) on `.version-history/.lock`.
 * Returns `WouldBlock` error immediately if another process holds the lock.
@@ -224,6 +241,7 @@ Commands:
   create   Create a new backup snapshot without pruning
   prune    Prune old snapshots according to retention policy
   restore  Restore files from a specific snapshot or point in time
+  verify   Verify integrity of destination files against recorded CRC32 hashes (alias: check)
   list     List all snapshots in destination with summary statistics (alias: ls)
   manual   Display the comprehensive user manual (plain text or markdown) (alias: man)
 
@@ -234,9 +252,14 @@ Options:
   -f, --paths-from <PATTERN>     Read source paths from a file, glob pattern, or stdin ('-') (one per line)
                                  Can be specified multiple times or comma-separated
                                  (aliases: --files-from, --sources-from)
+  -e, --exclude <PATTERN>        Exclude files/dirs matching glob pattern (multi-value)
+      --exclude-from <FILE>      Read exclude patterns from file (one per line)
       --flat                     Single-directory flat mode (all files in destination root) (alias: --flatten)
+      --flat-date                Flat mode using timestamped versions (<stem>.<TIMESTAMP>.<ext>)
+  -i, --include <PATTERN>        Partial restore filter (alias: --filter)
+      --quick                    Fast verification: check existence, size, and mtime without recomputing CRC32
   -p, --perms                    Record and restore Unix mode and Windows readonly permissions (alias: --preserve-permissions)
-  -t, --time <TIMESTAMP>         Point-in-time snapshot timestamp or 'latest' for restore (alias: --target-time)
+  -t, --time <TIMESTAMP>         Point-in-time snapshot timestamp or 'latest' for restore/verify (alias: --target-time)
   -F, --force                    Force execution, bypassing safety circuit breakers
       --allow-existing           Allow destination or restore target directory to contain pre-existing foreign files
       --allow-empty-source       Allow empty source without tripping the 100% deletion safety circuit breaker
@@ -307,7 +330,7 @@ Precedence: CLI command-line flags and positional arguments always override sett
 
 ## 6. Test Suite & Verification
 
-The integration test suite consists of 26 automated tests:
+The automated test suite consists of 44 tests covering core functionality, edge cases, and safety invariants:
 
 * `tests/integration_tests.rs`:
   * `test_basic_backup_and_versioning`: Verifies initial mirror sync, subsequent modifications, and historical archiving.
@@ -330,6 +353,9 @@ The integration test suite consists of 26 automated tests:
   * `test_dangerous_overlapping_and_root_paths_rejected`: Verifies safety guards on root and overlapping paths.
   * `test_file_to_directory_and_directory_to_file_replacement`: Verifies replacement handling between file types.
   * `test_manifest_path_traversal_ignored`: Verifies directory traversal defense (`..` paths rejected).
+  * `test_exclude_system`: Verifies `-e / --exclude`, `--exclude-from`, and `.vcopyignore` ignore filtering and manifest recording.
+  * `test_verify_and_bit_rot_detection`: Verifies `vcopy verify` and `vcopy check` bit-rot detection, `--quick` mode, missing files, and non-zero exit codes.
+  * `test_flat_date_naming_and_orphan_recovery`: Verifies `--flat-date` naming format and orphan scan recovery with timestamps.
 * `tests/prune_tests.rs`:
   * `test_count_based_pruning`: Verifies `-n <N>` snapshot pruning.
   * `test_prune_preserves_older_snapshot_restore`: Verifies reverse-delta consolidation when intermediate snapshots are pruned.
@@ -340,3 +366,8 @@ The integration test suite consists of 26 automated tests:
   * `test_multi_snapshot_restore_with_later_deletions_and_modifications`: Verifies multi-stage modification and deletion recovery.
   * `test_restore_latest`: Verifies restore of current live mirror.
   * `test_restore_permissions_option`: Verifies mode permission preservation and restoration when `-p` is enabled.
+  * `test_partial_and_single_path_restore`: Verifies single-file restore, subtree restore, and wildcard glob filtering in hierarchical and flat modes.
+* Unit tests in `src/exclude.rs`, `src/restore.rs`, and `src/util.rs`:
+  * Pattern matching, directory exclusions, comments, negation parsing.
+  * Restore filter wildcards, exact prefix matching.
+  * Timestamp parsing, monotonic version parsing, and human-readable byte sizing.

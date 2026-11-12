@@ -48,6 +48,15 @@ QUICK START & SIMPLE EXAMPLES
        Using explicit -s / --sources and -d / --dest flags:
            $ vcopy -s /home/user/docs -s /home/user/photos -d /mnt/usb/backup
 
+       Excluding unwanted files or folders (-e / --exclude, --exclude-from, .vcopyignore):
+           # Exclude temporary files and build folders
+           $ vcopy -e "*.tmp" -e "node_modules/" -e "target/" /home/user/code /mnt/usb/backup
+
+           # Exclude patterns listed in an ignore file
+           $ vcopy --exclude-from .gitignore /home/user/code /mnt/usb/backup
+
+           # Any .vcopyignore file located in source directories is auto-applied
+
        Reading source paths from files, wildcards, or stdin (-f / --paths-from):
            # Read paths from a list file (one per line, # for comments)
            $ vcopy -f project_paths.txt -d /mnt/usb/backup
@@ -114,38 +123,54 @@ QUICK START & SIMPLE EXAMPLES
            keep-daily = 7
            keep-weekly = 4
 
-   5. Listing Snapshots
+   5. Listing Snapshots (list, ls)
        View historical snapshots, transfer metrics, and file change counts:
 
-           $ vcopy list /mnt/usb/backup
+           $ vcopy ls /mnt/usb/backup
 
        Output:
-           Snapshot                   Copied     Modified   Deleted    Transferred    
-           ---------------------------------------------------------------------------
-           2026-11-09_083000          142        0          0          12491024 bytes 
-           2026-11-09_091500          3          12         1          452010 bytes   
-           2026-11-09_100000 (live)   0          0          0          0 bytes        
+           Snapshot                   Copied     Modified   Deleted    Transferred             
+           ------------------------------------------------------------------------------------
+           2026-11-09_083000          142        0          0          11.9 MB (12,491,024 B)  
+           2026-11-09_091500          3          12         1          441.4 KB (452,010 B)    
+           2026-11-09_100000 (live)   0          0          0          0 B                     
 
-   6. Point-in-Time Restore
+   6. Point-in-Time & Partial Restore
        Restore files to an exact prior snapshot or the latest mirror:
 
            # Restore latest live mirror
            $ vcopy restore /mnt/usb/backup /tmp/restored
 
            # Restore files as they existed at a specific snapshot timestamp
-           $ vcopy restore --target-time 2026-11-09_083000 /mnt/usb/backup /tmp/restored
+           $ vcopy restore -t 2026-11-09_083000 /mnt/usb/backup /tmp/restored
+
+           # Restore a single file only
+           $ vcopy restore /mnt/usb/backup /tmp/restored documents/report.pdf
+
+           # Restore a directory subtree or glob pattern
+           $ vcopy restore -i "docs/" /mnt/usb/backup /tmp/restored
+           $ vcopy restore --filter "*.jpg" /mnt/usb/backup /tmp/restored
 
            # Restore with POSIX permissions and Windows readonly attributes
-           $ vcopy restore -p --target-time 2026-11-09_083000 /mnt/usb/backup /tmp/restored
+           $ vcopy restore -p -t 2026-11-09_083000 /mnt/usb/backup /tmp/restored
 
-   7. Retention & Snapshot Pruning
+   7. Integrity Verification & Bit-Rot Detection (verify, check)
+       Verify backup mirrors and historical snapshots against recorded CRC32 hashes:
+
+           # Full bit-rot check (reads and recomputes SIMD CRC32 for every file)
+           $ vcopy verify /mnt/usb/backup
+
+           # Quick check (compares file sizes and timestamps, skipping full file reads)
+           $ vcopy check --quick /mnt/usb/backup
+
+   8. Retention & Snapshot Pruning
        Prune old snapshots using count limits or GFS schedules:
 
            # Retain only the newest 5 snapshots
            $ vcopy prune -n 5 /mnt/usb/backup
 
            # Retain 24 hourly, 7 daily, 4 weekly, 12 monthly, and 1 yearly snapshots
-           $ vcopy prune --keep-hourly 24 --keep-daily 7 --keep-weekly 4 /mnt/usb/backup
+           $ vcopy prune --hourly 24 --daily 7 --weekly 4 /mnt/usb/backup
 
            # Dry run: preview which snapshots would be deleted without writing
            $ vcopy prune -n 5 --dry-run -v /mnt/usb/backup
@@ -169,10 +194,22 @@ OPTIONS
               Path to configuration file. Accepts direct CLI arguments format,
               plain key-value, TOML, or JSON.
 
+       -e, --exclude <PATTERN>
+              Exclude files or directories matching glob pattern (e.g. *.tmp,
+              node_modules/, target/, .DS_Store). Can be specified multiple times.
+
+       --exclude-from <FILE>
+              Read exclude glob patterns from a file (one per line, e.g. .gitignore).
+              Can be specified multiple times.
+
        --flat
               Single-directory flat mode: stores all live and historical files
               directly in destination root using .v0, .v1 version numbers.
               Alias: --flatten.
+
+       --flat-date
+              In flat mode, use timestamp in archived version names
+              (<stem>.<YYYY-MM-DD_HHMMSS>.<ext>) instead of monotonic .v<N>.
 
        -p, --perms
               Record POSIX mode bits (Unix) and readonly attributes (Windows)
@@ -181,8 +218,13 @@ OPTIONS
 
        -t, --time <TIMESTAMP>
               Target snapshot timestamp (YYYY-MM-DD_HHMMSS or prefix) or
-              'latest' for restore.
+              'latest' for restore or verify.
               Aliases: --target-time, --snapshot.
+
+       -i, --include <PATH_OR_GLOB>
+              In restore mode, restore only files matching the given path,
+              prefix directory (e.g. docs/), or glob pattern (*.pdf).
+              Alias: --filter.
 
        -F, --force
               Force execution, bypassing safety circuit breakers (100% loss,
@@ -202,6 +244,10 @@ OPTIONS
        --dry-run
               Simulate execution and display planned operations without
               modifying the filesystem.
+
+       --quick
+              In verify / check mode, perform quick integrity checks using file
+              sizes and timestamps, skipping full file reads and CRC32 computation.
 
        -v, --verbose
               Enable detailed output listing every copied, modified, and
@@ -239,20 +285,22 @@ SUBCOMMANDS
        create
               Create a new backup snapshot without running retention pruning.
 
-       restore
+       restore [OPTIONS] <DEST> <TARGET_DIR> [PATH_OR_PATTERN]
               Restore files from destination to a target directory.
+              Supports full, single-file, subtree, and wildcard pattern restore.
               Use -t / --time <TIMESTAMP> to select a point in time.
 
        list, ls
               List all snapshots in destination with summary statistics.
 
+       verify, check
+              Verify backup integrity and detect bit-rot against recorded manifests.
+              Recalculates SIMD CRC32 hashes by default; use --quick for size/mtime.
+
        prune  Manually prune snapshots according to retention rules.
 
        manual, man
               Display this complete user manual. Use --markdown for markdown.
-
-       manual
-              Display the user manual. Add --markdown for Markdown output.
 
 STORAGE MODES
    1. Hierarchical Snapshot Mode (Default)
@@ -260,14 +308,22 @@ STORAGE MODES
        When a file changes, the older version is displaced into a timestamped
        directory under .version-history/<YYYY-MM-DD_HHMMSS>/.
 
-   2. Single-Directory Flat Mode (--flatten)
+   2. Single-Directory Flat Mode (--flat)
        All files are kept in the destination root folder:
        - Numbered versions: <stem>.v0.<ext>, <stem>.v1.<ext>, ...
+       - Timestamped versions: <stem>.<TIMESTAMP>.<ext> with --flat-date.
+       - Monotonic numbering behavior: version numbers are strictly monotonic
+         and are NEVER shifted or renamed during snapshot pruning, preventing
+         massive disk I/O thrashing and FAT32/exFAT filesystem corruption.
+       - GFS Retention in Flat Mode: GFS pruning policies operate seamlessly
+         on flat mode snapshot ledgers, removing expired versions without
+         altering the names of retained historical files.
        - Collision disambiguation: <stem>_from_<source>.<ext>
        - Metadata: .version-history.baseline.json,
                    .version-history.manifest.jsonl,
                    .version-history.lock
-       - Automatic orphan scan recovery if metadata files are missing.
+       - Automatic orphan scan recovery: recovers history automatically from
+         both .v<N> and timestamped flat files if metadata is missing.
 
 SYSTEM INVARIANTS & SAFETY GUARANTEES
        1. Zero Links: Never creates or follows hardlinks, symlinks, or block
@@ -283,6 +339,12 @@ SYSTEM INVARIANTS & SAFETY GUARANTEES
           migrates displaced files into the preceding kept snapshot before
           removal, preventing data loss across restore points.
        6. Resilient Advisory Locking: Non-blocking .lock with PID file fallback.
+       7. 100% Wipeout Circuit Breaker: If source directories are empty or
+          unmounted, sync aborts immediately instead of deleting the destination
+          mirror. Override with --allow-empty-source or -F/--force.
+       8. Foreign & System Directory Guards: Refuses to overwrite root (/), user
+          home, system directories, or foreign populated folders lacking vcopy
+          metadata. Override with --allow-existing or -F/--force.
 
 EXIT STATUS
        0      Success.

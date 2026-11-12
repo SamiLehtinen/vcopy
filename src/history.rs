@@ -308,8 +308,32 @@ pub fn recover_flat_manifest_from_orphans(dest: &Path) -> Option<FlatManifest> {
             }
         }
 
-        let snap_dt = dt + Duration::seconds(v as i64);
-        let snap_name = snap_dt.format("%Y-%m-%d_%H%M%S").to_string();
+        let (snap_dt, snap_name) = if v >= 20000000000000 {
+            let v_str = v.to_string();
+            if v_str.len() == 14 {
+                let s_name = format!(
+                    "{}-{}-{}_{}{}{}",
+                    &v_str[0..4],
+                    &v_str[4..6],
+                    &v_str[6..8],
+                    &v_str[8..10],
+                    &v_str[10..12],
+                    &v_str[12..14]
+                );
+                let s_dt = chrono::NaiveDateTime::parse_from_str(&s_name, "%Y-%m-%d_%H%M%S")
+                    .map(|ndt| DateTime::<Utc>::from_naive_utc_and_offset(ndt, Utc))
+                    .unwrap_or(dt);
+                (s_dt, s_name)
+            } else {
+                let snap_dt = dt + Duration::seconds((v % 86400) as i64);
+                let snap_name = snap_dt.format("%Y-%m-%d_%H%M%S").to_string();
+                (snap_dt, snap_name)
+            }
+        } else {
+            let snap_dt = dt + Duration::seconds(v as i64);
+            let snap_name = snap_dt.format("%Y-%m-%d_%H%M%S").to_string();
+            (snap_dt, snap_name)
+        };
         snapshots.push(SnapshotManifest {
             comment: crate::models::default_manifest_comment(),
             version: 2,
@@ -322,6 +346,7 @@ pub fn recover_flat_manifest_from_orphans(dest: &Path) -> Option<FlatManifest> {
                 files_deleted: 0,
                 bytes_transferred: total_bytes,
             },
+            excludes: Vec::new(),
             changes,
             state,
         });
@@ -341,6 +366,7 @@ pub fn recover_flat_manifest_from_orphans(dest: &Path) -> Option<FlatManifest> {
             files_deleted: 0,
             bytes_transferred: live_total_bytes,
         },
+        excludes: Vec::new(),
         changes: Vec::new(),
         state: live_files,
     };
@@ -562,6 +588,7 @@ pub fn recover_snapshot_manifest(snap_dir: &Path, snap_name: &str) -> io::Result
             files_deleted: deleted_count,
             bytes_transferred: total_bytes,
         },
+        excludes: Vec::new(),
         changes,
         state,
     };
@@ -635,6 +662,7 @@ pub fn recover_hierarchical_baseline(dest: &Path) -> Option<SnapshotManifest> {
             files_deleted: 0,
             bytes_transferred: total_bytes,
         },
+        excludes: Vec::new(),
         changes: Vec::new(),
         state: live_states,
     };

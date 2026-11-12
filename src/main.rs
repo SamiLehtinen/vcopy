@@ -4,6 +4,7 @@ use std::process;
 use clap::{Parser, Subcommand};
 
 mod config;
+mod exclude;
 mod history;
 mod lock;
 mod manual;
@@ -12,13 +13,16 @@ mod prune;
 mod restore;
 mod sync;
 mod util;
+mod verify;
 
 use config::ConfigFile;
+use exclude::ExcludeFilter;
 use history::list_snapshots;
 use prune::{run_prune, PruneOptions};
 use restore::{run_restore, RestoreOptions};
 use sync::{run_create, SyncOptions};
-use util::parse_sources;
+use util::{format_size, parse_sources};
+use verify::{run_verify, VerifyOptions};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -137,6 +141,10 @@ struct Cli {
     #[arg(long = "flat", alias = "flatten", visible_alias = "flatten")]
     flat: bool,
 
+    /// In flat mode, use timestamp in archived version names (<stem>.<TIMESTAMP>.<ext>) instead of monotonic .v<N>
+    #[arg(long = "flat-date", alias = "flat-dates", global = true)]
+    flat_date: bool,
+
     /// Target snapshot timestamp (YYYY-MM-DD_HHMMSS or prefix) or 'latest'
     #[arg(
         short = 't',
@@ -158,6 +166,25 @@ struct Cli {
         global = true
     )]
     preserve_permissions: bool,
+
+    /// Exclude files and directories matching glob pattern (can be specified multiple times)
+    #[arg(
+        short = 'e',
+        long = "exclude",
+        value_name = "PATTERN",
+        global = true,
+        action = clap::ArgAction::Append
+    )]
+    exclude: Vec<String>,
+
+    /// Read exclude patterns from a file (one pattern per line)
+    #[arg(
+        long = "exclude-from",
+        value_name = "FILE",
+        global = true,
+        action = clap::ArgAction::Append
+    )]
+    exclude_from: Vec<PathBuf>,
 
     /// Force execution, bypassing safety circuit breakers (100% loss, foreign directory, missing source)
     #[arg(short = 'F', long = "force", global = true)]
@@ -274,6 +301,16 @@ enum Commands {
         )]
         target_time: Option<String>,
 
+        /// Optional path or pattern filter to restore (e.g. 'docs/', 'report.pdf', or '*.txt')
+        #[arg(
+            short = 'i',
+            long = "include",
+            alias = "filter",
+            visible_alias = "filter",
+            value_name = "PATH_OR_GLOB"
+        )]
+        include: Option<String>,
+
         /// Print restored file paths
         #[arg(short = 'v', long = "verbose")]
         verbose: bool,
@@ -285,11 +322,41 @@ enum Commands {
         /// Target directory where restored files will be written
         #[arg(value_name = "OUTPUT_DIR")]
         target_out: Option<PathBuf>,
+
+        /// Optional path or pattern filter (e.g. 'documents/report.pdf' or 'docs/')
+        #[arg(value_name = "PATH_OR_PATTERN")]
+        path_filter: Option<String>,
     },
     /// List all snapshots in destination with summary statistics
     #[command(alias = "ls")]
     List {
         /// Backup directory containing .version-history/
+        #[arg(value_name = "DEST")]
+        dest: Option<PathBuf>,
+    },
+    /// Verify backup integrity and detect bit-rot against recorded manifests
+    #[command(alias = "check")]
+    Verify {
+        /// Perform quick check (size and mtime only, skips reading full file content)
+        #[arg(long = "quick")]
+        quick: bool,
+
+        /// Target snapshot timestamp (YYYY-MM-DD_HHMMSS or prefix) or 'latest'
+        #[arg(
+            short = 't',
+            long = "time",
+            alias = "target-time",
+            visible_alias = "target-time",
+            alias = "snapshot",
+            value_name = "TIMESTAMP"
+        )]
+        target_time: Option<String>,
+
+        /// Print verified file details and untracked files
+        #[arg(short = 'v', long = "verbose")]
+        verbose: bool,
+
+        /// Backup directory containing mirror and .version-history/
         #[arg(value_name = "DEST")]
         dest: Option<PathBuf>,
     },
@@ -413,6 +480,7 @@ fn execute() -> Result<(), String> {
             .and_then(|c| c.allow_missing_source)
             .unwrap_or(false);
     let flatten = cli.flat || cfg.as_ref().and_then(|c| c.flatten).unwrap_or(false);
+    let flat_date = cli.flat_date || cfg.as_ref().and_then(|c| c.flat_date).unwrap_or(false);
     let dry_run = cli.dry_run || cfg.as_ref().and_then(|c| c.dry_run).unwrap_or(false);
     let verbose = cli.verbose || cfg.as_ref().and_then(|c| c.verbose).unwrap_or(false);
     let preserve_permissions = cli.preserve_permissions
@@ -448,8 +516,37 @@ fn execute() -> Result<(), String> {
         .target_time
         .or_else(|| cfg.as_ref().and_then(|c| c.target_time.clone()));
 
+    let mut exclude_filter = ExcludeFilter::new();
+    for p in &cli.exclude {
+        exclude_filter.add_pattern(p);
+    }
+    for file in &cli.exclude_from {
+        exclude_filter.add_patterns_from_file(file).map_err(|e| {
+            format!(
+                "Error reading exclude-from file '{}': {}",
+                file.display(),
+                e
+            )
+        })?;
+    }
+    if let Some(cfg_ref) = &cfg {
+        for p in cfg_ref.get_excludes() {
+            exclude_filter.add_pattern(&p);
+        }
+        for file in cfg_ref.get_exclude_from() {
+            exclude_filter.add_patterns_from_file(&file).map_err(|e| {
+                format!(
+                    "Error reading exclude-from file '{}': {}",
+                    file.display(),
+                    e
+                )
+            })?;
+        }
+    }
+
     let sync_opts = SyncOptions {
         flatten,
+        flat_date,
         dry_run,
         verbose,
         preserve_permissions,
@@ -457,6 +554,7 @@ fn execute() -> Result<(), String> {
         allow_existing,
         allow_empty_source,
         allow_missing_source,
+        exclude_filter,
     };
 
     let prune_opts = PruneOptions {
@@ -487,11 +585,19 @@ fn execute() -> Result<(), String> {
                 }),
                 "restore" => Some(Commands::Restore {
                     target_time: None,
+                    include: None,
                     verbose: false,
                     dest: None,
                     target_out: None,
+                    path_filter: None,
                 }),
-                "list" => Some(Commands::List { dest: None }),
+                "list" | "ls" => Some(Commands::List { dest: None }),
+                "verify" | "check" => Some(Commands::Verify {
+                    quick: false,
+                    target_time: None,
+                    verbose: false,
+                    dest: None,
+                }),
                 "manual" | "man" => Some(Commands::Manual { markdown: false }),
                 "create" => Some(Commands::Create { paths: Vec::new() }),
                 "auto" => Some(Commands::Auto { paths: Vec::new() }),
@@ -575,12 +681,16 @@ fn execute() -> Result<(), String> {
         }
         Some(Commands::Restore {
             target_time: r_target_time,
+            include,
             verbose: r_verbose,
             dest: r_dest,
             target_out: r_target_out,
+            path_filter,
         }) => {
+            let filter = include.or(path_filter);
             let restore_opts = RestoreOptions {
                 target_time: r_target_time.or_else(|| target_time.clone()),
+                filter,
                 verbose: r_verbose || verbose,
                 preserve_permissions,
                 force,
@@ -611,6 +721,26 @@ fn execute() -> Result<(), String> {
                 })?;
             run_list(&effective_dest)?;
         }
+        Some(Commands::Verify {
+            quick,
+            target_time: v_target_time,
+            verbose: v_verbose,
+            dest: v_dest,
+        }) => {
+            let verify_opts = VerifyOptions {
+                quick,
+                verbose: v_verbose || verbose,
+                target_time: v_target_time.or_else(|| target_time.clone()),
+            };
+            let effective_dest = v_dest
+                .or_else(|| cli.dest.clone())
+                .or_else(|| cfg.as_ref().and_then(|c| c.dest.clone()))
+                .ok_or_else(|| {
+                    "Error: Backup destination directory required via argument, --dest, or --config."
+                        .to_string()
+                })?;
+            run_verify(&verify_opts, &effective_dest)?;
+        }
         Some(Commands::Manual { markdown }) => {
             if markdown || cli.manual_markdown {
                 manual::print_manual_markdown();
@@ -627,29 +757,29 @@ fn run_list(dest: &Path) -> Result<(), String> {
     if history::is_flat_repo(dest) {
         if let Some(flat) = history::load_flat_manifest(dest) {
             println!(
-                "{:<26} {:<10} {:<10} {:<10} {:<15}",
+                "{:<26} {:<10} {:<10} {:<10} {:<24}",
                 "Snapshot (flat)", "Copied", "Modified", "Deleted", "Transferred"
             );
-            println!("{}", "-".repeat(75));
+            println!("{}", "-".repeat(84));
 
             for s in &flat.snapshots {
                 println!(
-                    "{:<26} {:<10} {:<10} {:<10} {:<15}",
+                    "{:<26} {:<10} {:<10} {:<10} {:<24}",
                     s.snapshot_name,
                     s.summary.files_copied,
                     s.summary.files_modified,
                     s.summary.files_deleted,
-                    format!("{} bytes", s.summary.bytes_transferred)
+                    format_size(s.summary.bytes_transferred)
                 );
             }
 
             println!(
-                "{:<26} {:<10} {:<10} {:<10} {:<15}",
+                "{:<26} {:<10} {:<10} {:<10} {:<24}",
                 format!("{} (live)", flat.baseline.snapshot_name),
                 flat.baseline.summary.files_copied,
                 flat.baseline.summary.files_modified,
                 flat.baseline.summary.files_deleted,
-                format!("{} bytes", flat.baseline.summary.bytes_transferred)
+                format_size(flat.baseline.summary.bytes_transferred)
             );
             return Ok(());
         }
@@ -663,20 +793,20 @@ fn run_list(dest: &Path) -> Result<(), String> {
     }
 
     println!(
-        "{:<26} {:<10} {:<10} {:<10} {:<15}",
+        "{:<26} {:<10} {:<10} {:<10} {:<24}",
         "Snapshot", "Copied", "Modified", "Deleted", "Transferred"
     );
-    println!("{}", "-".repeat(75));
+    println!("{}", "-".repeat(84));
 
     for s in &snapshots {
         if let Ok(m) = history::load_manifest(&s.path) {
             println!(
-                "{:<26} {:<10} {:<10} {:<10} {:<15}",
+                "{:<26} {:<10} {:<10} {:<10} {:<24}",
                 s.name,
                 m.summary.files_copied,
                 m.summary.files_modified,
                 m.summary.files_deleted,
-                format!("{} bytes", m.summary.bytes_transferred)
+                format_size(m.summary.bytes_transferred)
             );
         } else {
             println!("{:<26} (corrupt or unreadable manifest)", s.name);
@@ -689,12 +819,12 @@ fn run_list(dest: &Path) -> Result<(), String> {
             .is_none_or(|last| b.snapshot_name.as_str() > last.name.as_str());
         if is_newer && !b.snapshot_name.is_empty() {
             println!(
-                "{:<26} {:<10} {:<10} {:<10} {:<15}",
+                "{:<26} {:<10} {:<10} {:<10} {:<24}",
                 format!("{} (live)", b.snapshot_name),
                 b.summary.files_copied,
                 b.summary.files_modified,
                 b.summary.files_deleted,
-                format!("{} bytes", b.summary.bytes_transferred)
+                format_size(b.summary.bytes_transferred)
             );
         }
     }

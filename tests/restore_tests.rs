@@ -342,3 +342,98 @@ fn test_restore_permissions_option() {
         assert_eq!(latest_script_mode, 0o640);
     }
 }
+
+#[test]
+fn test_partial_and_single_path_restore() {
+    let ctx = TestContext::new("partial_restore");
+
+    // Create a structured folder hierarchy
+    fs::create_dir_all(ctx.src.join("docs")).unwrap();
+    fs::create_dir_all(ctx.src.join("photos")).unwrap();
+
+    fs::write(ctx.src.join("docs/guide.md"), b"# Guide").unwrap();
+    fs::write(ctx.src.join("docs/api.txt"), b"API Reference").unwrap();
+    fs::write(ctx.src.join("photos/pic.jpg"), b"JPEG DATA").unwrap();
+    fs::write(ctx.src.join("notes.txt"), b"My notes").unwrap();
+
+    let st = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st.success());
+
+    // 1. Single file restore using positional argument
+    let out_single = ctx.dir.join("out_single");
+    let st_single = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("restore")
+        .arg(&ctx.dst)
+        .arg(&out_single)
+        .arg("docs/guide.md")
+        .status()
+        .unwrap();
+    assert!(st_single.success());
+    assert!(out_single.join("docs/guide.md").is_file());
+    assert_eq!(
+        fs::read(out_single.join("docs/guide.md")).unwrap(),
+        b"# Guide"
+    );
+    assert!(!out_single.join("docs/api.txt").exists());
+    assert!(!out_single.join("photos/pic.jpg").exists());
+    assert!(!out_single.join("notes.txt").exists());
+
+    // 2. Subtree restore using --filter / --include
+    let out_subtree = ctx.dir.join("out_subtree");
+    let st_subtree = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("restore")
+        .arg("--filter")
+        .arg("docs/")
+        .arg(&ctx.dst)
+        .arg(&out_subtree)
+        .status()
+        .unwrap();
+    assert!(st_subtree.success());
+    assert!(out_subtree.join("docs/guide.md").is_file());
+    assert!(out_subtree.join("docs/api.txt").is_file());
+    assert!(!out_subtree.join("photos/pic.jpg").exists());
+    assert!(!out_subtree.join("notes.txt").exists());
+
+    // 3. Glob pattern restore (e.g. *.jpg)
+    let out_glob = ctx.dir.join("out_glob");
+    let st_glob = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("restore")
+        .arg("--include")
+        .arg("*.jpg")
+        .arg(&ctx.dst)
+        .arg(&out_glob)
+        .status()
+        .unwrap();
+    assert!(st_glob.success());
+    assert!(out_glob.join("photos/pic.jpg").is_file());
+    assert!(!out_glob.join("docs/guide.md").exists());
+    assert!(!out_glob.join("notes.txt").exists());
+
+    // 4. Flat mode partial restore
+    let flat_dst = ctx.dir.join("flat_dst");
+    let st_flat_sync = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--flat")
+        .arg(&ctx.src)
+        .arg(&flat_dst)
+        .status()
+        .unwrap();
+    assert!(st_flat_sync.success());
+
+    let out_flat = ctx.dir.join("out_flat");
+    let st_flat_restore = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("restore")
+        .arg("--include")
+        .arg("*.jpg")
+        .arg(&flat_dst)
+        .arg(&out_flat)
+        .status()
+        .unwrap();
+    assert!(st_flat_restore.success());
+    assert!(out_flat.join("photos/pic.jpg").is_file());
+    assert!(!out_flat.join("notes.txt").exists());
+    assert!(!out_flat.join("docs/guide.md").exists());
+}

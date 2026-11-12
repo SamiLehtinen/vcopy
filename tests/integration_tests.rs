@@ -1384,3 +1384,229 @@ fn test_shorter_cli_flags_and_aliases() {
         .unwrap();
     assert!(st_prune.success());
 }
+
+#[test]
+fn test_exclude_system() {
+    let ctx = TestContext::new("exclude_system");
+
+    // Create source files:
+    // keep.txt
+    // temp.tmp (should be excluded by --exclude *.tmp)
+    // node_modules/package.json (should be excluded by --exclude node_modules/)
+    // ignored_by_file.log (should be excluded by --exclude-from)
+    // ignored_by_vcopyignore.bak (should be excluded by .vcopyignore)
+    // docs/guide.md (should be kept)
+    // docs/draft.tmp (should be excluded by *.tmp)
+
+    fs::write(ctx.src.join("keep.txt"), b"keep me").unwrap();
+    fs::write(ctx.src.join("temp.tmp"), b"temp data").unwrap();
+    fs::create_dir_all(ctx.src.join("node_modules")).unwrap();
+    fs::write(ctx.src.join("node_modules/package.json"), b"pkg").unwrap();
+
+    let ignore_file = ctx.dir.join("my_ignores.txt");
+    fs::write(&ignore_file, b"*.log\n# comment\n").unwrap();
+    fs::write(ctx.src.join("ignored_by_file.log"), b"log data").unwrap();
+
+    fs::write(ctx.src.join(".vcopyignore"), b"*.bak\n").unwrap();
+    fs::write(ctx.src.join("ignored_by_vcopyignore.bak"), b"bak data").unwrap();
+
+    fs::create_dir_all(ctx.src.join("docs")).unwrap();
+    fs::write(ctx.src.join("docs/guide.md"), b"guide").unwrap();
+    fs::write(ctx.src.join("docs/draft.tmp"), b"draft").unwrap();
+
+    let st = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("-e")
+        .arg("*.tmp")
+        .arg("--exclude")
+        .arg("node_modules/")
+        .arg("--exclude-from")
+        .arg(&ignore_file)
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st.success());
+
+    // Kept files should exist in dst
+    assert!(ctx.dst.join("keep.txt").exists());
+    assert!(ctx.dst.join("docs/guide.md").exists());
+
+    // Excluded files should NOT exist in dst
+    assert!(!ctx.dst.join("temp.tmp").exists());
+    assert!(!ctx.dst.join("node_modules").exists());
+    assert!(!ctx.dst.join("node_modules/package.json").exists());
+    assert!(!ctx.dst.join("ignored_by_file.log").exists());
+    assert!(!ctx.dst.join("ignored_by_vcopyignore.bak").exists());
+    assert!(!ctx.dst.join("docs/draft.tmp").exists());
+
+    // Verify baseline records the excludes
+    let baseline_content =
+        fs::read_to_string(ctx.dst.join(".version-history/baseline.json")).unwrap();
+    assert!(baseline_content.contains("*.tmp"));
+    assert!(baseline_content.contains("node_modules/"));
+    assert!(baseline_content.contains("*.log"));
+}
+
+#[test]
+fn test_verify_and_bit_rot_detection() {
+    let ctx = TestContext::new("verify_bitrot");
+
+    fs::write(ctx.src.join("file1.txt"), b"initial content 1").unwrap();
+    fs::write(ctx.src.join("file2.txt"), b"initial content 2").unwrap();
+
+    let st = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st.success());
+
+    // 1. Initial verify should pass
+    let st_verify = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("verify")
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st_verify.success());
+
+    // 2. Also check alias 'check' and flag --quick
+    let st_check = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("check")
+        .arg("--quick")
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st_check.success());
+
+    // 3. Corrupt file1.txt by mutating bytes of same length (simulating bit-rot)
+    fs::write(ctx.dst.join("file1.txt"), b"mutated content 1").unwrap();
+
+    let out_corrupt = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("verify")
+        .arg(&ctx.dst)
+        .output()
+        .unwrap();
+    assert!(
+        !out_corrupt.status.success(),
+        "verify should fail on corrupted file"
+    );
+    let stderr_str = String::from_utf8_lossy(&out_corrupt.stderr);
+    let stdout_str = String::from_utf8_lossy(&out_corrupt.stdout);
+    let combined = format!("{}\n{}", stdout_str, stderr_str);
+    assert!(
+        combined.contains("[CORRUPTED]") || combined.contains("BIT-ROT DETECTED"),
+        "Output should report corruption: {}",
+        combined
+    );
+
+    // 4. Restore file1 and delete file2 (simulate missing file)
+    fs::write(ctx.dst.join("file1.txt"), b"initial content 1").unwrap();
+    fs::remove_file(ctx.dst.join("file2.txt")).unwrap();
+
+    let out_missing = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("verify")
+        .arg(&ctx.dst)
+        .output()
+        .unwrap();
+    assert!(
+        !out_missing.status.success(),
+        "verify should fail on missing file"
+    );
+    let stdout_missing = String::from_utf8_lossy(&out_missing.stdout);
+    assert!(
+        stdout_missing.contains("[MISSING]"),
+        "Output should report missing file: {}",
+        stdout_missing
+    );
+}
+
+#[test]
+fn test_flat_date_naming_and_orphan_recovery() {
+    let ctx = TestContext::new("flat_date");
+
+    // Version 1
+    fs::write(ctx.src.join("notes.txt"), b"notes version 1").unwrap();
+
+    let st = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--flat")
+        .arg("--flat-date")
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st.success());
+    assert_eq!(
+        fs::read(ctx.dst.join("notes.txt")).unwrap(),
+        b"notes version 1"
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(1050));
+
+    // Version 2 (modifies notes.txt)
+    fs::write(ctx.src.join("notes.txt"), b"notes version 2").unwrap();
+
+    let st2 = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--flat")
+        .arg("--flat-date")
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st2.success());
+    assert_eq!(
+        fs::read(ctx.dst.join("notes.txt")).unwrap(),
+        b"notes version 2"
+    );
+
+    // Check that a timestamped archive file was created (e.g. notes.2026-*.txt)
+    let entries: Vec<_> = fs::read_dir(&ctx.dst)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.starts_with("notes.20") && n.ends_with(".txt"))
+        .collect();
+    assert_eq!(
+        entries.len(),
+        1,
+        "Expected 1 timestamped archive file, found: {:?}",
+        entries
+    );
+
+    // Test orphan scan recovery by removing metadata files
+    let baseline_json = ctx.dst.join(".version-history.baseline.json");
+    let manifest_jsonl = ctx.dst.join(".version-history.manifest.jsonl");
+    assert!(baseline_json.is_file());
+    assert!(manifest_jsonl.is_file());
+    fs::remove_file(&baseline_json).unwrap();
+    fs::remove_file(&manifest_jsonl).unwrap();
+
+    // vcopy ls should trigger orphan scan recovery
+    let ls_out = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("ls")
+        .arg(&ctx.dst)
+        .output()
+        .unwrap();
+    assert!(ls_out.status.success());
+    let ls_stdout = String::from_utf8_lossy(&ls_out.stdout);
+    assert!(ls_stdout.contains("Snapshot (flat)"));
+
+    // Manifests should be reconstructed
+    assert!(baseline_json.is_file());
+    assert!(manifest_jsonl.is_file());
+
+    // Restore version 1
+    let restore_out = ctx.dir.join("restore_out");
+    let st_restore = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("restore")
+        .arg("-t")
+        .arg(&entries[0][6..23]) // extract timestamp
+        .arg(&ctx.dst)
+        .arg(&restore_out)
+        .status()
+        .unwrap();
+    assert!(st_restore.success());
+    assert_eq!(
+        fs::read(restore_out.join("notes.txt")).unwrap(),
+        b"notes version 1"
+    );
+}

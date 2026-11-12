@@ -59,7 +59,7 @@ find /home/user/code -name "*.rs" | vcopy -f - -d /mnt/usb/backup
 
 ---
 
-### 3. Numbered Versions in a Flat Directory (`--flat`)
+### 3. Numbered Versions in a Flat Directory (`--flat` or `--flat-date`)
 When you want all files in a single flat folder without nested subfolders (ideal for flat USB thumb drives, camera ingest dropboxes, or single-folder cloud storage), use `--flat` (or `--flatten`):
 
 Every file is placed directly in the destination root. Historical revisions receive monotonic numbered version suffixes (`.v0`, `.v1`, `.v2`, ...):
@@ -84,9 +84,25 @@ vcopy --flat /home/user/docs /home/user/photos /mnt/usb/backup
 └── .version-history.manifest.jsonl# Append-only snapshot ledger
 ```
 
+You can also use `--flat-date` to name displaced flat revisions with full timestamps (e.g. `report.2026-11-09_083000.pdf`) instead of monotonic version numbers.
+
 ---
 
-### 4. Zero-Obfuscation Configuration Files (`-c / --config`)
+### 4. Excluding Files & Directories (`-e`, `--exclude-from`, `.vcopyignore`)
+Easily ignore temporary files, build caches, or system artifacts:
+
+```bash
+# Exclude specific glob patterns or folders
+vcopy -e "*.tmp" -e "target/" -e ".DS_Store" /home/user/code /mnt/usb/backup
+
+# Read ignore patterns from a file (e.g. .gitignore or custom list)
+vcopy --exclude-from .gitignore /home/user/code /mnt/usb/backup
+```
+`vcopy` also automatically loads `.vcopyignore` files placed directly inside source directories, applying patterns relative to their directory location.
+
+---
+
+### 5. Zero-Obfuscation Configuration Files (`-c / --config`)
 No separate manual or syntax to learn! A configuration file can literally contain the **exact same command-line flags and parameters** you already type in the terminal:
 
 ```bash
@@ -99,57 +115,82 @@ vcopy -c backup.conf
 --sources /home/user/documents
 --sources /home/user/photos
 --dest /mnt/usb/backup
---flatten
---preserve-permissions
---keep-daily 7
---keep-weekly 4
+--flat
+--perms
+--daily 7
+--weekly 4
 ```
 
 **Simple key-value format (`backup.conf`):**
 ```text
 dest = /mnt/usb/backup
 sources = /home/user/documents, /home/user/photos
-flatten = true
-preserve-permissions = true
-keep-daily = 7
-keep-weekly = 4
+flat = true
+perms = true
+daily = 7
+weekly = 4
 ```
 
 ---
 
-### 5. Listing Snapshots
-View historical snapshots, transfer statistics, and timestamps:
+### 6. Listing Snapshots (`list` / `ls`)
+View historical snapshots, transfer statistics, and timestamps with human-readable sizes:
 ```bash
-vcopy list /mnt/usb/backup
+vcopy ls /mnt/usb/backup
 ```
 Example output:
 ```text
 Snapshot                   Copied     Modified   Deleted    Transferred    
 ---------------------------------------------------------------------------
-2026-11-09_083000          142        0          0          12491024 bytes 
-2026-11-09_091500          3          12         1          452010 bytes   
-2026-11-09_100000 (live)   0          0          0          0 bytes        
+2026-11-09_083000          142        0          0          11.9 MB (12,491,024 B)
+2026-11-09_091500          3          12         1          441.4 KB (452,010 B)
+2026-11-09_100000 (live)   0          0          0          0 B
 ```
 
 ---
 
-### 6. Point-in-Time Restore
-Restore files to an exact prior snapshot or the latest mirror:
+### 7. Point-in-Time & Partial Restore
+Restore the entire mirror, a specific historical snapshot, or a single file / subtree:
 
 ```bash
 # Restore latest mirror state
 vcopy restore /mnt/usb/backup /tmp/restored
 
 # Restore files from a specific snapshot timestamp
-vcopy restore --target-time 2026-11-09_083000 /mnt/usb/backup /tmp/restored
+vcopy restore -t 2026-11-09_083000 /mnt/usb/backup /tmp/restored
+
+# Restore a single file or directory subtree
+vcopy restore /mnt/usb/backup /tmp/restored documents/report.pdf
+vcopy restore /mnt/usb/backup /tmp/restored docs/
+
+# Filter files to restore using glob patterns (-i / --include / --filter)
+vcopy restore -i "*.pdf" /mnt/usb/backup /tmp/restored
 
 # Restore with POSIX permissions and Windows readonly attributes
-vcopy restore -p --target-time 2026-11-09_083000 /mnt/usb/backup /tmp/restored
+vcopy restore -p -t 2026-11-09_083000 /mnt/usb/backup /tmp/restored
 ```
 
 ---
 
-### 7. Retention & Snapshot Pruning
+### 8. Integrity Verification & Bit-Rot Detection (`vcopy verify` / `check`)
+Verify destination files against recorded SIMD CRC32 checksums to detect disk corruption, bit-rot, or tampering:
+
+```bash
+# Full verification: recomputes CRC32 checksums for live mirror and historical snapshots
+vcopy verify /mnt/usb/backup
+
+# Fast verification: checks file sizes and nanosecond modification timestamps only
+vcopy check --quick /mnt/usb/backup
+
+# Verify files as of a specific historical snapshot timestamp
+vcopy verify -t 2026-11-09_083000 /mnt/usb/backup
+```
+
+Returns exit code 0 if all files match, or non-zero if corruptions or missing files are detected.
+
+---
+
+### 9. Retention & Snapshot Pruning
 Prune old snapshots using count limits or Grandfather-Father-Son (GFS) policies:
 
 ```bash
@@ -157,7 +198,7 @@ Prune old snapshots using count limits or Grandfather-Father-Son (GFS) policies:
 vcopy prune -n 5 /mnt/usb/backup
 
 # Retain 24 hourly, 7 daily, 4 weekly, 12 monthly, and 1 yearly snapshots
-vcopy prune --keep-hourly 24 --keep-daily 7 --keep-weekly 4 /mnt/usb/backup
+vcopy prune --hourly 24 --daily 7 --weekly 4 /mnt/usb/backup
 
 # Preview pruning actions without deleting files (dry run)
 vcopy prune -n 5 --dry-run -v /mnt/usb/backup
@@ -179,9 +220,14 @@ vcopy [OPTIONS] [SOURCES... DEST]... [COMMAND]
 | `-d, --dest` | `<PATH>` | None | Destination backup directory (overrides positional destination or config setting). *(Alias: `--destination`)* |
 | `-f, --paths-from` | `<PATTERN>` or `-` | None | Read source paths from text file, file glob (e.g. `backups*`), or stdin (`-`). Can be specified multiple times or comma-separated. *(Aliases: `--files-from`, `--sources-from`)* |
 | `-c, --config` | `<FILE>` | None | Path to configuration file. Accepts direct CLI arguments format (exact same flags/args as command line), key-value, TOML, or JSON. |
+| `-e, --exclude` | `<PATTERN>` | None | Exclude files or directories matching glob pattern (e.g. `*.tmp`, `target/`). Can be specified multiple times. |
+| `--exclude-from` | `<FILE>` | None | Read exclude patterns from a file (one per line, e.g. `.gitignore`). Can be specified multiple times. |
 | `--flat` | Flag | `false` | Single-directory flat mode: stores all live and historical files in root using `.v0`, `.v1` version numbers. *(Alias: `--flatten`)* |
+| `--flat-date` | Flag | `false` | Flat mode using timestamped versions (`<stem>.<TIMESTAMP>.<ext>`) instead of monotonic version numbers. |
+| `-i, --include` | `<PATTERN>` | None | Partial restore filter: restore only matching files or subtrees. *(Alias: `--filter`)* |
+| `--quick` | Flag | `false` | Fast verification mode: verify file existence, sizes, and mtime without recomputing CRC32. |
 | `-p, --perms` | Flag | `false` | Record POSIX file modes (Unix) and readonly attributes (Windows) in manifests and restore them. *(Aliases: `--preserve-permissions`, `--permissions`)* |
-| `-t, --time` | `<TIMESTAMP>` | `latest` | Point-in-time timestamp (`YYYY-MM-DD_HHMMSS` or prefix) or `latest` for `restore`. *(Aliases: `--target-time`, `--snapshot`)* |
+| `-t, --time` | `<TIMESTAMP>` | `latest` | Point-in-time timestamp (`YYYY-MM-DD_HHMMSS` or prefix) or `latest` for `restore` and `verify`. *(Aliases: `--target-time`, `--snapshot`)* |
 | `-F, --force` | Flag | `false` | Force execution, bypassing safety circuit breakers (100% loss, foreign directory, missing source). |
 | `--allow-existing` | Flag | `false` | Allow destination or restore output directory to contain pre-existing foreign files without failing. |
 | `--allow-empty-source` | Flag | `false` | Allow empty source without tripping the 100% deletion safety circuit breaker. |
@@ -238,13 +284,22 @@ A standard UNIX man page is also included at [`docs/vcopy.1`](docs/vcopy.1) and 
   vcopy create /source /dest
   ```
 - **`restore`**:
-  Restores files from destination to a specified target directory from `latest` or `-t / --time <TIMESTAMP>`:
+  Restores files from destination to a specified target directory from `latest` or `-t / --time <TIMESTAMP>`. Optionally filter by path or pattern:
   ```bash
   vcopy restore /dest /output_dir
   vcopy restore -t 2026-11-09_083000 /dest /output_dir
+  vcopy restore /dest /output_dir documents/report.pdf
+  vcopy restore -i "*.pdf" /dest /output_dir
+  ```
+- **`verify`** *(alias: `check`)*:
+  Verifies destination files against recorded SIMD CRC32 checksums, reporting verified, corrupted, missing, and untracked files:
+  ```bash
+  vcopy verify /dest
+  vcopy check --quick /dest
+  vcopy verify -t 2026-11-09_083000 /dest
   ```
 - **`list`** *(alias: `ls`)*:
-  Displays all historical snapshots, transfer statistics, and timestamps:
+  Displays all historical snapshots, transfer statistics, and timestamps with formatted human-readable sizes:
   ```bash
   vcopy list /dest
   vcopy ls /dest
@@ -378,6 +433,9 @@ Ideal when you need all files in a single flat folder (e.g. flat USB drives, pho
 ├── .version-history.baseline.json      # Latest live state manifest
 └── .version-history.manifest.jsonl     # Append-only snapshot ledger
 ```
+
+- **Monotonic Version Numbering:** Numbered versions (`.v0`, `.v1`, ...) increment monotonically and are never renamed when intermediate snapshots are pruned. This avoids massive metadata renames and directory table fragmentation on FAT32 and exFAT.
+- **Timestamped Revisions:** Use `--flat-date` to name displaced flat revisions with their snapshot timestamp (e.g. `report.2026-11-09_083000.pdf`) instead of version numbers.
 
 ---
 

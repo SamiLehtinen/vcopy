@@ -26,6 +26,7 @@ static COPY_COUNTER: AtomicU64 = AtomicU64::new(0);
 #[derive(Debug, Clone)]
 pub struct SyncOptions {
     pub flatten: bool,
+    pub flat_date: bool,
     pub dry_run: bool,
     pub verbose: bool,
     pub preserve_permissions: bool,
@@ -33,6 +34,7 @@ pub struct SyncOptions {
     pub allow_existing: bool,
     pub allow_empty_source: bool,
     pub allow_missing_source: bool,
+    pub exclude_filter: crate::exclude::ExcludeFilter,
 }
 
 struct DiscoveredFile {
@@ -152,11 +154,22 @@ fn run_create_standard(
             continue;
         }
 
+        let mut source_filter = opts.exclude_filter.clone();
+        if src_root.is_dir() {
+            let ignore_file = src_root.join(".vcopyignore");
+            if ignore_file.is_file() {
+                let _ = source_filter.add_patterns_from_file(&ignore_file);
+            }
+        }
+
         if src_root.is_file() {
             let file_name = src_root
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| "file".to_string());
+            if source_filter.is_excluded(&file_name, false) {
+                continue;
+            }
             let rel_str = if m.destination_prefix.is_empty() {
                 sanitize_segment(&file_name)
             } else {
@@ -209,7 +222,33 @@ fn run_create_standard(
             continue;
         }
 
-        for entry in WalkDir::new(src_root).min_depth(1).into_iter().flatten() {
+        for entry in WalkDir::new(src_root)
+            .into_iter()
+            .filter_entry(|entry| {
+                if entry.depth() == 0 {
+                    return true;
+                }
+                if let Ok(rel) = entry.path().strip_prefix(src_root) {
+                    let rel_str = normalize_rel_path(rel);
+                    let is_dir = entry.file_type().is_dir();
+                    if source_filter.is_excluded(&rel_str, is_dir) {
+                        return false;
+                    }
+                    if is_dir {
+                        let sub_ignore = entry.path().join(".vcopyignore");
+                        if sub_ignore.is_file() {
+                            let _ = source_filter
+                                .add_patterns_from_file_with_prefix(&sub_ignore, &rel_str);
+                        }
+                    }
+                    true
+                } else {
+                    true
+                }
+            })
+            .filter_map(|e| e.ok())
+            .filter(|e| e.depth() >= 1)
+        {
             let path = entry.path();
             if entry.file_type().is_file() {
                 if let Ok(rel) = path.strip_prefix(src_root) {
@@ -391,6 +430,7 @@ fn run_create_standard(
             let archived_manifest = match prior_manifest {
                 Some(mut pm) => {
                     pm.snapshot_name = archive_snap_name.clone();
+                    pm.excludes = opts.exclude_filter.raw_patterns().to_vec();
                     pm
                 }
                 None => SnapshotManifest {
@@ -400,6 +440,7 @@ fn run_create_standard(
                     snapshot_timestamp: now_utc,
                     sources: mappings.clone(),
                     summary: RunSummary::default(),
+                    excludes: opts.exclude_filter.raw_patterns().to_vec(),
                     changes: Vec::new(),
                     state: baseline_map.values().cloned().collect(),
                 },
@@ -413,13 +454,38 @@ fn run_create_standard(
             snapshot_name: live_snap_name.clone(),
             snapshot_timestamp: now_utc,
             sources: mappings,
-            summary,
+            summary: summary.clone(),
+            excludes: opts.exclude_filter.raw_patterns().to_vec(),
             changes,
             state: new_state,
         };
         save_baseline(dest, &new_baseline)?;
+        if opts.verbose || opts.dry_run {
+            let prefix = if opts.dry_run {
+                "Dry-run summary"
+            } else {
+                "Summary"
+            };
+            println!(
+                "{}: {} copied, {} modified, {} deleted, transferred {}",
+                prefix,
+                summary.files_copied,
+                summary.files_modified,
+                summary.files_deleted,
+                crate::util::format_size(summary.bytes_transferred)
+            );
+        }
         Ok(Some(new_baseline))
     } else {
+        if opts.verbose || opts.dry_run {
+            println!(
+                "Dry-run summary: {} copied, {} modified, {} deleted, transferred {}",
+                summary.files_copied,
+                summary.files_modified,
+                summary.files_deleted,
+                crate::util::format_size(summary.bytes_transferred)
+            );
+        }
         let dry_manifest = SnapshotManifest {
             comment: crate::models::default_manifest_comment(),
             version: 2,
@@ -427,6 +493,7 @@ fn run_create_standard(
             snapshot_timestamp: now_utc,
             sources: mappings,
             summary,
+            excludes: opts.exclude_filter.raw_patterns().to_vec(),
             changes,
             state: new_state,
         };
@@ -536,11 +603,22 @@ fn run_create_flat(
             continue;
         }
 
+        let mut source_filter = opts.exclude_filter.clone();
+        if src_root.is_dir() {
+            let ignore_file = src_root.join(".vcopyignore");
+            if ignore_file.is_file() {
+                let _ = source_filter.add_patterns_from_file(&ignore_file);
+            }
+        }
+
         if src_root.is_file() {
             let file_name = src_root
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| "file".to_string());
+            if source_filter.is_excluded(&file_name, false) {
+                continue;
+            }
             let rel_str = if m.destination_prefix.is_empty() {
                 sanitize_segment(&file_name)
             } else {
@@ -583,7 +661,33 @@ fn run_create_flat(
             continue;
         }
 
-        for entry in WalkDir::new(src_root).min_depth(1).into_iter().flatten() {
+        for entry in WalkDir::new(src_root)
+            .into_iter()
+            .filter_entry(|entry| {
+                if entry.depth() == 0 {
+                    return true;
+                }
+                if let Ok(rel) = entry.path().strip_prefix(src_root) {
+                    let rel_str = normalize_rel_path(rel);
+                    let is_dir = entry.file_type().is_dir();
+                    if source_filter.is_excluded(&rel_str, is_dir) {
+                        return false;
+                    }
+                    if is_dir {
+                        let sub_ignore = entry.path().join(".vcopyignore");
+                        if sub_ignore.is_file() {
+                            let _ = source_filter
+                                .add_patterns_from_file_with_prefix(&sub_ignore, &rel_str);
+                        }
+                    }
+                    true
+                } else {
+                    true
+                }
+            })
+            .filter_map(|e| e.ok())
+            .filter(|e| e.depth() >= 1)
+        {
             let path = entry.path();
             if entry.file_type().is_file() {
                 if let Ok(rel) = path.strip_prefix(src_root) {
@@ -722,6 +826,8 @@ fn run_create_flat(
                 &version_counters,
                 &existing_on_disk,
                 &allocated_stored_names,
+                opts.flat_date,
+                &archive_snap_name,
             );
             version_counters.insert(stored.to_string(), next_ctr);
             existing_on_disk.remove(stored);
@@ -814,6 +920,8 @@ fn run_create_flat(
                         &version_counters,
                         &existing_on_disk,
                         &allocated_stored_names,
+                        opts.flat_date,
+                        &archive_snap_name,
                     );
                     version_counters.insert(stored_name.to_string(), next_ctr);
                     existing_on_disk.insert(ver_name.clone());
@@ -903,6 +1011,7 @@ fn run_create_flat(
         snapshot_timestamp: now_utc,
         sources: mappings.clone(),
         summary: summary.clone(),
+        excludes: opts.exclude_filter.raw_patterns().to_vec(),
         changes: changes.clone(),
         state: new_state,
     };
@@ -918,6 +1027,7 @@ fn run_create_flat(
                 Some(f) => {
                     let mut pm = f.baseline.clone();
                     pm.snapshot_name = archive_snap_name;
+                    pm.excludes = opts.exclude_filter.raw_patterns().to_vec();
                     pm.state = archived_states.into_values().collect();
                     pm
                 }
@@ -928,6 +1038,7 @@ fn run_create_flat(
                     snapshot_timestamp: now_utc,
                     sources: mappings.clone(),
                     summary: RunSummary::default(),
+                    excludes: opts.exclude_filter.raw_patterns().to_vec(),
                     changes: Vec::new(),
                     state: archived_states.into_values().collect(),
                 },
@@ -945,6 +1056,22 @@ fn run_create_flat(
         };
 
         save_flat_manifest(dest, &updated_flat_manifest)?;
+    }
+
+    if opts.verbose || opts.dry_run {
+        let prefix = if opts.dry_run {
+            "Dry-run summary"
+        } else {
+            "Summary"
+        };
+        println!(
+            "{}: {} copied, {} modified, {} deleted, transferred {}",
+            prefix,
+            summary.files_copied,
+            summary.files_modified,
+            summary.files_deleted,
+            crate::util::format_size(summary.bytes_transferred)
+        );
     }
 
     Ok(Some(new_baseline))
@@ -1019,10 +1146,33 @@ fn allocate_version_name(
     version_counters: &BTreeMap<String, u64>,
     existing_on_disk: &HashSet<String>,
     allocated_stored_names: &HashSet<String>,
+    flat_date: bool,
+    now_stamp: &str,
 ) -> (String, u64) {
     let (stem, ext) = split_stem_ext(stored_name);
     let start_ctr = version_counters.get(stored_name).copied().unwrap_or(0) + 1;
     let mut ctr = start_ctr;
+
+    if flat_date {
+        let base_candidate = format!("{}.{}{}", stem, now_stamp, ext);
+        if !is_reserved_flat_name(&base_candidate)
+            && !existing_on_disk.contains(&base_candidate)
+            && !allocated_stored_names.contains(&base_candidate)
+        {
+            return (base_candidate, ctr);
+        }
+        let mut k = 1;
+        loop {
+            let candidate = format!("{}.{}.v{}{}", stem, now_stamp, k, ext);
+            if !is_reserved_flat_name(&candidate)
+                && !existing_on_disk.contains(&candidate)
+                && !allocated_stored_names.contains(&candidate)
+            {
+                return (candidate, ctr);
+            }
+            k += 1;
+        }
+    }
 
     loop {
         let candidate = format!("{}.v{}{}", stem, ctr, ext);
