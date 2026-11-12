@@ -81,23 +81,48 @@ struct Cli {
     max_versions: Option<usize>,
 
     /// Number of hourly snapshot buckets to retain in GFS mode (default: 24)
-    #[arg(long = "keep-hourly", value_name = "N")]
+    #[arg(
+        long = "keep-hourly",
+        alias = "hourly",
+        visible_alias = "hourly",
+        value_name = "N"
+    )]
     keep_hourly: Option<usize>,
 
     /// Number of daily snapshot buckets to retain in GFS mode (default: 7)
-    #[arg(long = "keep-daily", value_name = "N")]
+    #[arg(
+        long = "keep-daily",
+        alias = "daily",
+        visible_alias = "daily",
+        value_name = "N"
+    )]
     keep_daily: Option<usize>,
 
     /// Number of weekly snapshot buckets to retain in GFS mode (default: 4)
-    #[arg(long = "keep-weekly", value_name = "N")]
+    #[arg(
+        long = "keep-weekly",
+        alias = "weekly",
+        visible_alias = "weekly",
+        value_name = "N"
+    )]
     keep_weekly: Option<usize>,
 
     /// Number of monthly snapshot buckets to retain in GFS mode (default: 12)
-    #[arg(long = "keep-monthly", value_name = "N")]
+    #[arg(
+        long = "keep-monthly",
+        alias = "monthly",
+        visible_alias = "monthly",
+        value_name = "N"
+    )]
     keep_monthly: Option<usize>,
 
     /// Number of yearly snapshot buckets to retain in GFS mode (default: 1)
-    #[arg(long = "keep-yearly", value_name = "N")]
+    #[arg(
+        long = "keep-yearly",
+        alias = "yearly",
+        visible_alias = "yearly",
+        value_name = "N"
+    )]
     keep_yearly: Option<usize>,
 
     /// Perform a trial run without making any filesystem modifications
@@ -108,17 +133,47 @@ struct Cli {
     #[arg(short = 'v', long = "verbose")]
     verbose: bool,
 
-    /// Copy files into destination root without source directory prefixes
-    #[arg(long = "flatten")]
-    flatten: bool,
+    /// Copy files into destination root without source directory prefixes (flat mode)
+    #[arg(long = "flat", alias = "flatten", visible_alias = "flatten")]
+    flat: bool,
 
     /// Target snapshot timestamp (YYYY-MM-DD_HHMMSS or prefix) or 'latest'
-    #[arg(long = "target-time", value_name = "TIMESTAMP")]
+    #[arg(
+        short = 't',
+        long = "time",
+        alias = "target-time",
+        visible_alias = "target-time",
+        alias = "snapshot",
+        value_name = "TIMESTAMP"
+    )]
     target_time: Option<String>,
 
     /// Save and restore file permissions in snapshot metadata (default: disabled)
-    #[arg(short = 'p', long = "preserve-permissions", global = true)]
+    #[arg(
+        short = 'p',
+        long = "perms",
+        alias = "preserve-permissions",
+        visible_alias = "preserve-permissions",
+        alias = "permissions",
+        global = true
+    )]
     preserve_permissions: bool,
+
+    /// Force execution, bypassing safety circuit breakers (100% loss, foreign directory, missing source)
+    #[arg(short = 'F', long = "force", global = true)]
+    force: bool,
+
+    /// Allow destination or restore output directory to contain pre-existing foreign files
+    #[arg(long = "allow-existing", global = true)]
+    allow_existing: bool,
+
+    /// Allow empty source without tripping the 100% deletion circuit breaker
+    #[arg(long = "allow-empty-source", global = true)]
+    allow_empty_source: bool,
+
+    /// Allow missing source paths without aborting the backup run
+    #[arg(long = "allow-missing-source", global = true)]
+    allow_missing_source: bool,
 
     /// Display the complete user manual in plain text / ASCII man-page format
     #[arg(long = "manual", alias = "man", global = true)]
@@ -150,23 +205,48 @@ enum Commands {
         max_versions: Option<usize>,
 
         /// Number of hourly snapshot buckets to retain
-        #[arg(long = "keep-hourly", value_name = "N")]
+        #[arg(
+            long = "keep-hourly",
+            alias = "hourly",
+            visible_alias = "hourly",
+            value_name = "N"
+        )]
         keep_hourly: Option<usize>,
 
         /// Number of daily snapshot buckets to retain
-        #[arg(long = "keep-daily", value_name = "N")]
+        #[arg(
+            long = "keep-daily",
+            alias = "daily",
+            visible_alias = "daily",
+            value_name = "N"
+        )]
         keep_daily: Option<usize>,
 
         /// Number of weekly snapshot buckets to retain
-        #[arg(long = "keep-weekly", value_name = "N")]
+        #[arg(
+            long = "keep-weekly",
+            alias = "weekly",
+            visible_alias = "weekly",
+            value_name = "N"
+        )]
         keep_weekly: Option<usize>,
 
         /// Number of monthly snapshot buckets to retain
-        #[arg(long = "keep-monthly", value_name = "N")]
+        #[arg(
+            long = "keep-monthly",
+            alias = "monthly",
+            visible_alias = "monthly",
+            value_name = "N"
+        )]
         keep_monthly: Option<usize>,
 
         /// Number of yearly snapshot buckets to retain
-        #[arg(long = "keep-yearly", value_name = "N")]
+        #[arg(
+            long = "keep-yearly",
+            alias = "yearly",
+            visible_alias = "yearly",
+            value_name = "N"
+        )]
         keep_yearly: Option<usize>,
 
         /// Simulate pruning without deleting snapshot directories
@@ -184,7 +264,14 @@ enum Commands {
     /// Restore files from a specific snapshot or point in time
     Restore {
         /// Target snapshot timestamp (YYYY-MM-DD_HHMMSS) or 'latest'
-        #[arg(long = "target-time", value_name = "TIMESTAMP")]
+        #[arg(
+            short = 't',
+            long = "time",
+            alias = "target-time",
+            visible_alias = "target-time",
+            alias = "snapshot",
+            value_name = "TIMESTAMP"
+        )]
         target_time: Option<String>,
 
         /// Print restored file paths
@@ -200,6 +287,7 @@ enum Commands {
         target_out: Option<PathBuf>,
     },
     /// List all snapshots in destination with summary statistics
+    #[command(alias = "ls")]
     List {
         /// Backup directory containing .version-history/
         #[arg(value_name = "DEST")]
@@ -311,7 +399,20 @@ fn execute() -> Result<(), String> {
         None => None,
     };
 
-    let flatten = cli.flatten || cfg.as_ref().and_then(|c| c.flatten).unwrap_or(false);
+    let force = cli.force || cfg.as_ref().and_then(|c| c.force).unwrap_or(false);
+    let allow_existing =
+        cli.allow_existing || cfg.as_ref().and_then(|c| c.allow_existing).unwrap_or(false);
+    let allow_empty_source = cli.allow_empty_source
+        || cfg
+            .as_ref()
+            .and_then(|c| c.allow_empty_source)
+            .unwrap_or(false);
+    let allow_missing_source = cli.allow_missing_source
+        || cfg
+            .as_ref()
+            .and_then(|c| c.allow_missing_source)
+            .unwrap_or(false);
+    let flatten = cli.flat || cfg.as_ref().and_then(|c| c.flatten).unwrap_or(false);
     let dry_run = cli.dry_run || cfg.as_ref().and_then(|c| c.dry_run).unwrap_or(false);
     let verbose = cli.verbose || cfg.as_ref().and_then(|c| c.verbose).unwrap_or(false);
     let preserve_permissions = cli.preserve_permissions
@@ -352,6 +453,10 @@ fn execute() -> Result<(), String> {
         dry_run,
         verbose,
         preserve_permissions,
+        force,
+        allow_existing,
+        allow_empty_source,
+        allow_missing_source,
     };
 
     let prune_opts = PruneOptions {
@@ -478,6 +583,8 @@ fn execute() -> Result<(), String> {
                 target_time: r_target_time.or_else(|| target_time.clone()),
                 verbose: r_verbose || verbose,
                 preserve_permissions,
+                force,
+                allow_existing,
             };
             let effective_dest = r_dest
                 .or_else(|| cli.dest.clone())

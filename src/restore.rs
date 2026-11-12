@@ -23,10 +23,12 @@ pub struct RestoreOptions {
     pub target_time: Option<String>,
     pub verbose: bool,
     pub preserve_permissions: bool,
+    pub force: bool,
+    pub allow_existing: bool,
 }
 
 pub fn run_restore(opts: &RestoreOptions, dest: &Path, target_out: &Path) -> io::Result<()> {
-    validate_restore_paths(dest, target_out)?;
+    validate_restore_paths(dest, target_out, opts.force || opts.allow_existing)?;
     fs::create_dir_all(target_out)?;
 
     if is_flat_repo(dest) {

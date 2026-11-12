@@ -29,6 +29,10 @@ pub struct SyncOptions {
     pub dry_run: bool,
     pub verbose: bool,
     pub preserve_permissions: bool,
+    pub force: bool,
+    pub allow_existing: bool,
+    pub allow_empty_source: bool,
+    pub allow_missing_source: bool,
 }
 
 struct DiscoveredFile {
@@ -46,7 +50,12 @@ pub fn run_create(
     sources: &[PathBuf],
     dest: &Path,
 ) -> io::Result<Option<SnapshotManifest>> {
-    validate_sync_paths(sources, dest)?;
+    validate_sync_paths(
+        sources,
+        dest,
+        opts.force || opts.allow_existing,
+        opts.force || opts.allow_missing_source,
+    )?;
 
     // Check if destination is already a flat repo or if --flatten requested
     let flat_repo_exists = is_flat_repo(dest);
@@ -282,6 +291,21 @@ fn run_create_standard(
 
     let snap_dir = hist_dir.join(&archive_snap_name);
     let pid = process::id();
+
+    // Safety Circuit Breaker: 100% loss / complete wipeout prevention
+    if !opts.force
+        && !opts.allow_empty_source
+        && !baseline_map.is_empty()
+        && current_source_paths.is_empty()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "Safety circuit breaker: sync would delete 100% of files in destination (all {} file(s) would be deleted). Aborting sync to prevent complete wipeout. Pass --allow-empty-source or --force if you intentionally want to delete all files.",
+                baseline_map.len()
+            ),
+        ));
+    }
 
     let mut changes: Vec<FileChange> = Vec::new();
     let mut summary = RunSummary::default();
@@ -649,6 +673,21 @@ fn run_create_flat(
 
     let archive_snap_name = unique_flat_snapshot_name(existing_snapshots, &prior_snap_name, None);
     let pid = process::id();
+
+    // Safety Circuit Breaker: 100% loss / complete wipeout prevention
+    if !opts.force
+        && !opts.allow_empty_source
+        && !baseline_map.is_empty()
+        && current_source_paths.is_empty()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "Safety circuit breaker: sync would delete 100% of files in destination (all {} file(s) would be deleted). Aborting sync to prevent complete wipeout. Pass --allow-empty-source or --force if you intentionally want to delete all files.",
+                baseline_map.len()
+            ),
+        ));
+    }
 
     let mut changes: Vec<FileChange> = Vec::new();
     let mut summary = RunSummary::default();

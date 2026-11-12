@@ -21,11 +21,14 @@
 * **Nanosecond Timestamps & CRC32 Integrity:** Overcomes exFAT/FAT32 2-second timestamp drift by persisting exact nanosecond modification timestamps (`mtime_ns`) and SIMD-accelerated CRC32 checksums in metadata manifests (`baseline.json`, `manifest.json`, and `.version-history.manifest.jsonl`).
 * **Cross-Platform Permission Preservation (`-p / --preserve-permissions`):** Optional tracking of Unix file mode permissions and Windows/DOS readonly attributes. Persisted in snapshot manifests and restored on compatible platforms without encumbering non-POSIX filesystems.
 * **Atomic Staging Writes:** All file copies and manifest writes use temporary staging files (`.<file>.tmp.<pid>.<counter>`) and atomic renames to prevent partial corruption from power failures or abrupt termination.
-* **Strict Path & Purge Safety Guards:**
-  * Rejects empty paths, filesystem root (`/`), or non-directory targets for backup destinations and restore outputs.
+* **Strict Path, Purge & Safety Circuit Breakers:**
+  * **100% Deletion Wipeout Prevention:** Sync operations that would result in deleting 100% of files in a populated destination (e.g. empty or detached source) are blocked by an automatic circuit breaker unless `--allow-empty-source` or `--force` is specified.
+  * **Missing / Unmounted Source Check:** Verifies source path existence prior to execution to prevent accidental wipeout from unmounted volumes unless overridden with `--allow-missing-source` or `--force`.
+  * **Protected Directory Guards:** Refuses filesystem root (`/`), core system paths (`/etc`, `/usr`, `/bin`, `C:\Windows`, etc.), and user home directory directly (`$HOME`, `~`), as well as foreign non-empty destination directories lacking `vcopy` repository metadata unless overridden with `--allow-existing` or `--force`.
   * Rejects overlapping source/destination paths (`src == dest`, `dest` inside `src`, `src` inside `dest`) and restore paths (`target_out == dest`, `target_out` inside `dest`, `dest` inside `target_out`).
   * Validates all relative manifest paths via `is_safe_relative_path` (forbidding absolute paths, `..`, `.`, and `.version-history` path segments).
   * Enforces strict validation before removing snapshot directories during pruning (requiring 17-byte `YYYY-MM-DD_HHMMSS` format, direct parent containment, and non-symlink verification).
+* **Heuristic Orphan Scan Recovery:** In both flat and hierarchical modes, missing or destroyed metadata manifests (`manifest.json`, `baseline.json`, `.version-history.manifest.jsonl`) are automatically reconstructed on-the-fly by scanning filesystem contents, `.deleted` markers, and `.v<N>` version numbers.
 * **Non-Blocking Resilient Advisory Locking:** Modifying target paths requires an exclusive advisory lock on `.version-history/.lock`. If the underlying filesystem (e.g., exFAT FUSE) does not support POSIX `flock`/`fcntl`, it automatically falls back to an atomic PID-file locking mechanism (`.version-history/.pid_lock`).
 
 ---
@@ -56,7 +59,7 @@ The live files mirror the source layout at `<destination>/`. Displaced historica
             └── deleted_pic.jpg.deleted # Zero-byte deletion marker
 ```
 
-### 2.2 Mode 2: Single-Directory Flat Mode (`--flatten`)
+### 2.2 Mode 2: Single-Directory Flat Mode (`--flat`)
 
 All files are stored flat inside `<destination>/` without subfolders. Live files use their base names (with collision disambiguation where needed), and displaced versions receive monotonic version numbers (`.v0`, `.v1`, ...).
 
@@ -221,8 +224,8 @@ Commands:
   create   Create a new backup snapshot without pruning
   prune    Prune old snapshots according to retention policy
   restore  Restore files from a specific snapshot or point in time
-  list     List all snapshots in destination with summary statistics
-  manual   Display the comprehensive user manual (plain text or markdown)
+  list     List all snapshots in destination with summary statistics (alias: ls)
+  manual   Display the comprehensive user manual (plain text or markdown) (alias: man)
 
 Options:
   -c, --config <FILE>            Configuration file (CLI flags, key-value, TOML, or JSON)
@@ -231,14 +234,19 @@ Options:
   -f, --paths-from <PATTERN>     Read source paths from a file, glob pattern, or stdin ('-') (one per line)
                                  Can be specified multiple times or comma-separated
                                  (aliases: --files-from, --sources-from)
-      --flatten                  Single-directory flat mode (all files in destination root)
-  -p, --preserve-permissions     Record and restore Unix mode and Windows readonly permissions
+      --flat                     Single-directory flat mode (all files in destination root) (alias: --flatten)
+  -p, --perms                    Record and restore Unix mode and Windows readonly permissions (alias: --preserve-permissions)
+  -t, --time <TIMESTAMP>         Point-in-time snapshot timestamp or 'latest' for restore (alias: --target-time)
+  -F, --force                    Force execution, bypassing safety circuit breakers
+      --allow-existing           Allow destination or restore target directory to contain pre-existing foreign files
+      --allow-empty-source       Allow empty source without tripping the 100% deletion safety circuit breaker
+      --allow-missing-source     Allow missing source paths without aborting the backup run
   -n, --max-versions <N>         Retain only the N newest snapshots (overrides GFS)
-      --keep-hourly <N>          Hourly retention count (default: 24)
-      --keep-daily <N>           Daily retention count (default: 7)
-      --keep-weekly <N>          Weekly retention count (default: 4)
-      --keep-monthly <N>         Monthly retention count (default: 12)
-      --keep-yearly <N>          Yearly retention count (default: 1)
+      --keep-hourly <N>          Hourly retention count (default: 24) (alias: --hourly)
+      --keep-daily <N>           Daily retention count (default: 7) (alias: --daily)
+      --keep-weekly <N>          Weekly retention count (default: 4) (alias: --weekly)
+      --keep-monthly <N>         Monthly retention count (default: 12) (alias: --monthly)
+      --keep-yearly <N>          Yearly retention count (default: 1) (alias: --yearly)
       --dry-run                  Simulate actions without writing or deleting files
   -v, --verbose                  Enable detailed execution logging
       --manual                   Display the comprehensive user manual in plain text / ASCII man-page format

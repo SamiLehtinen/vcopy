@@ -195,13 +195,111 @@ pub fn resolve_clean_path(path: &Path) -> io::Result<PathBuf> {
     Ok(normalized)
 }
 
-pub fn validate_dest_path(dest: &Path) -> io::Result<PathBuf> {
+pub fn is_system_or_root_directory(path: &Path) -> bool {
+    if path.parent().is_none() {
+        return true;
+    }
+    let p_str = path.to_string_lossy();
+    let trimmed = p_str.trim_end_matches(['/', '\\']);
+
+    let blocked_unix = [
+        "/etc",
+        "/usr",
+        "/bin",
+        "/sbin",
+        "/lib",
+        "/lib64",
+        "/var",
+        "/boot",
+        "/dev",
+        "/sys",
+        "/proc",
+        "/root",
+        "/System",
+        "/Applications",
+        "/Library",
+    ];
+    for b in &blocked_unix {
+        if trimmed == *b {
+            return true;
+        }
+    }
+
+    let lower = trimmed.to_lowercase();
+    if lower == "c:"
+        || lower == "c:\\windows"
+        || lower == "c:/windows"
+        || lower.starts_with("c:\\windows\\system32")
+        || lower.starts_with("c:/windows/system32")
+        || lower == "c:\\program files"
+        || lower == "c:/program files"
+        || lower == "c:\\program files (x86)"
+        || lower == "c:/program files (x86)"
+        || lower == "c:\\recovery"
+        || lower == "c:/recovery"
+    {
+        return true;
+    }
+
+    false
+}
+
+pub fn is_user_home_directory(path: &Path) -> bool {
+    let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) else {
+        return false;
+    };
+    if home.is_empty() {
+        return false;
+    }
+    let home_path = Path::new(&home);
+    if let (Ok(clean_p), Ok(clean_home)) = (resolve_clean_path(path), resolve_clean_path(home_path))
+    {
+        return clean_p == clean_home;
+    }
+    false
+}
+
+pub fn is_foreign_populated_directory(dest: &Path) -> bool {
+    if !dest.is_dir() {
+        return false;
+    }
+    if dest.join(".version-history").is_dir()
+        || dest.join(".version-history.baseline.json").is_file()
+        || dest.join(".version-history.manifest.jsonl").is_file()
+        || dest.join(".versionhistory.baseline.json").is_file()
+        || dest.join(".versionhistory.manifest.jsonl").is_file()
+        || dest.join(".vcopy.json").is_file()
+    {
+        return false;
+    }
+    if let Ok(entries) = std::fs::read_dir(dest) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !is_reserved_flat_name(&name) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+pub fn validate_dest_path(dest: &Path, allow_existing: bool) -> io::Result<PathBuf> {
     let clean_dest = resolve_clean_path(dest)?;
-    if clean_dest.parent().is_none() {
+    if is_system_or_root_directory(&clean_dest) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
-                "Safety error: refusing to use filesystem root '{}' as backup destination",
+                "Safety error: refusing to use system or root directory '{}' as destination",
+                clean_dest.display()
+            ),
+        ));
+    }
+    if is_user_home_directory(&clean_dest) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "Safety error: refusing to use home directory '{}' directly as backup destination. Please use a dedicated subdirectory (e.g. '{}/backups') instead.",
+                clean_dest.display(),
                 clean_dest.display()
             ),
         ));
@@ -227,17 +325,40 @@ pub fn validate_dest_path(dest: &Path) -> io::Result<PathBuf> {
             ),
         ));
     }
+    if !allow_existing && is_foreign_populated_directory(&clean_dest) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "Safety error: destination '{}' exists and contains non-vcopy files, but has no vcopy repository metadata. To avoid accidentally adopting or displacing files in an unrelated directory, choose an empty directory or pass --allow-existing or --force.",
+                clean_dest.display()
+            ),
+        ));
+    }
     Ok(clean_dest)
 }
 
-pub fn validate_sync_paths(sources: &[PathBuf], dest: &Path) -> io::Result<()> {
-    let clean_dest = validate_dest_path(dest)?;
+pub fn validate_sync_paths(
+    sources: &[PathBuf],
+    dest: &Path,
+    allow_existing: bool,
+    allow_missing_source: bool,
+) -> io::Result<()> {
+    let clean_dest = validate_dest_path(dest, allow_existing)?;
 
     for src in sources {
         if src.as_os_str().is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "Source path cannot be empty",
+            ));
+        }
+        if !allow_missing_source && !src.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "Safety error: source path '{}' does not exist or is unavailable. Aborting sync to prevent accidental deletion of destination data. (Pass --allow-missing-source or --force to proceed anyway)",
+                    src.display()
+                ),
             ));
         }
         let clean_src = resolve_clean_path(src)?;
@@ -276,15 +397,28 @@ pub fn validate_sync_paths(sources: &[PathBuf], dest: &Path) -> io::Result<()> {
     Ok(())
 }
 
-pub fn validate_restore_paths(dest: &Path, target_out: &Path) -> io::Result<()> {
-    let clean_dest = validate_dest_path(dest)?;
+pub fn validate_restore_paths(
+    dest: &Path,
+    target_out: &Path,
+    allow_existing: bool,
+) -> io::Result<()> {
+    let clean_dest = validate_dest_path(dest, true)?;
     let clean_out = resolve_clean_path(target_out)?;
 
-    if clean_out.parent().is_none() {
+    if is_system_or_root_directory(&clean_out) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
-                "Safety error: refusing to use filesystem root '{}' as restore output directory",
+                "Safety error: refusing to use system or root directory '{}' as restore output directory",
+                clean_out.display()
+            ),
+        ));
+    }
+    if is_user_home_directory(&clean_out) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "Safety error: refusing to restore directly into home directory '{}'. Please use a dedicated subdirectory instead.",
                 clean_out.display()
             ),
         ));
@@ -327,6 +461,19 @@ pub fn validate_restore_paths(dest: &Path, target_out: &Path) -> io::Result<()> 
                 target_out.display()
             ),
         ));
+    }
+    if !allow_existing && target_out.is_dir() {
+        if let Ok(mut entries) = std::fs::read_dir(target_out) {
+            if entries.next().is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "Safety error: restore target '{}' is not empty. Pass --allow-existing or --force to overwrite/merge into an existing directory.",
+                        target_out.display()
+                    ),
+                ));
+            }
+        }
     }
 
     Ok(())

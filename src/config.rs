@@ -81,7 +81,9 @@ pub struct ConfigFile {
         default,
         alias = "keep-hourly",
         alias = "keep_hourly",
-        alias = "--keep-hourly"
+        alias = "hourly",
+        alias = "--keep-hourly",
+        alias = "--hourly"
     )]
     pub keep_hourly: Option<usize>,
 
@@ -89,7 +91,9 @@ pub struct ConfigFile {
         default,
         alias = "keep-daily",
         alias = "keep_daily",
-        alias = "--keep-daily"
+        alias = "daily",
+        alias = "--keep-daily",
+        alias = "--daily"
     )]
     pub keep_daily: Option<usize>,
 
@@ -97,7 +101,9 @@ pub struct ConfigFile {
         default,
         alias = "keep-weekly",
         alias = "keep_weekly",
-        alias = "--keep-weekly"
+        alias = "weekly",
+        alias = "--keep-weekly",
+        alias = "--weekly"
     )]
     pub keep_weekly: Option<usize>,
 
@@ -105,7 +111,9 @@ pub struct ConfigFile {
         default,
         alias = "keep-monthly",
         alias = "keep_monthly",
-        alias = "--keep-monthly"
+        alias = "monthly",
+        alias = "--keep-monthly",
+        alias = "--monthly"
     )]
     pub keep_monthly: Option<usize>,
 
@@ -113,7 +121,9 @@ pub struct ConfigFile {
         default,
         alias = "keep-yearly",
         alias = "keep_yearly",
-        alias = "--keep-yearly"
+        alias = "yearly",
+        alias = "--keep-yearly",
+        alias = "--yearly"
     )]
     pub keep_yearly: Option<usize>,
 
@@ -123,23 +133,65 @@ pub struct ConfigFile {
     #[serde(default, alias = "verbose", alias = "--verbose", alias = "-v")]
     pub verbose: Option<bool>,
 
-    #[serde(default, alias = "flatten", alias = "--flatten")]
+    #[serde(
+        default,
+        alias = "flatten",
+        alias = "flat",
+        alias = "--flatten",
+        alias = "--flat"
+    )]
     pub flatten: Option<bool>,
 
     #[serde(
         default,
         alias = "preserve-permissions",
         alias = "preserve_permissions",
+        alias = "permissions",
+        alias = "perms",
         alias = "--preserve-permissions",
+        alias = "--permissions",
+        alias = "--perms",
         alias = "-p"
     )]
     pub preserve_permissions: Option<bool>,
+
+    #[serde(default, alias = "force", alias = "--force", alias = "-F")]
+    pub force: Option<bool>,
+
+    #[serde(
+        default,
+        alias = "allow-existing",
+        alias = "allow_existing",
+        alias = "--allow-existing"
+    )]
+    pub allow_existing: Option<bool>,
+
+    #[serde(
+        default,
+        alias = "allow-empty-source",
+        alias = "allow_empty_source",
+        alias = "--allow-empty-source"
+    )]
+    pub allow_empty_source: Option<bool>,
+
+    #[serde(
+        default,
+        alias = "allow-missing-source",
+        alias = "allow_missing_source",
+        alias = "--allow-missing-source"
+    )]
+    pub allow_missing_source: Option<bool>,
 
     #[serde(
         default,
         alias = "target-time",
         alias = "target_time",
-        alias = "--target-time"
+        alias = "time",
+        alias = "snapshot",
+        alias = "--target-time",
+        alias = "--time",
+        alias = "--snapshot",
+        alias = "-t"
     )]
     pub target_time: Option<String>,
 
@@ -303,7 +355,7 @@ pub fn parse_cli_or_keyval_config(content: &str) -> Result<ConfigFile, String> {
                     explicit_paths_from.push(PathBuf::from(p));
                 }
             }
-            "flatten" => {
+            "flatten" | "flat" => {
                 if let Some(v) = inline_val {
                     cfg.flatten = Some(v.parse::<bool>().unwrap_or(true));
                 } else if i + 1 < raw_tokens.len()
@@ -321,7 +373,7 @@ pub fn parse_cli_or_keyval_config(content: &str) -> Result<ConfigFile, String> {
                     cfg.flatten = Some(true);
                 }
             }
-            "preserve-permissions" | "preserve_permissions" | "p" => {
+            "preserve-permissions" | "preserve_permissions" | "permissions" | "perms" | "p" => {
                 if let Some(v) = inline_val {
                     cfg.preserve_permissions = Some(v.parse::<bool>().unwrap_or(true));
                 } else if i + 1 < raw_tokens.len()
@@ -337,6 +389,78 @@ pub fn parse_cli_or_keyval_config(content: &str) -> Result<ConfigFile, String> {
                     cfg.preserve_permissions = Some(raw_tokens[i] == "true");
                 } else {
                     cfg.preserve_permissions = Some(true);
+                }
+            }
+            "force" | "F" => {
+                if let Some(v) = inline_val {
+                    cfg.force = Some(v.parse::<bool>().unwrap_or(true));
+                } else if i + 1 < raw_tokens.len()
+                    && (raw_tokens[i + 1] == "true" || raw_tokens[i + 1] == "false")
+                {
+                    i += 1;
+                    cfg.force = Some(raw_tokens[i] == "true");
+                } else if i + 2 < raw_tokens.len()
+                    && raw_tokens[i + 1] == "="
+                    && (raw_tokens[i + 2] == "true" || raw_tokens[i + 2] == "false")
+                {
+                    i += 2;
+                    cfg.force = Some(raw_tokens[i] == "true");
+                } else {
+                    cfg.force = Some(true);
+                }
+            }
+            "allow-existing" | "allow_existing" => {
+                if let Some(v) = inline_val {
+                    cfg.allow_existing = Some(v.parse::<bool>().unwrap_or(true));
+                } else if i + 1 < raw_tokens.len()
+                    && (raw_tokens[i + 1] == "true" || raw_tokens[i + 1] == "false")
+                {
+                    i += 1;
+                    cfg.allow_existing = Some(raw_tokens[i] == "true");
+                } else if i + 2 < raw_tokens.len()
+                    && raw_tokens[i + 1] == "="
+                    && (raw_tokens[i + 2] == "true" || raw_tokens[i + 2] == "false")
+                {
+                    i += 2;
+                    cfg.allow_existing = Some(raw_tokens[i] == "true");
+                } else {
+                    cfg.allow_existing = Some(true);
+                }
+            }
+            "allow-empty-source" | "allow_empty_source" => {
+                if let Some(v) = inline_val {
+                    cfg.allow_empty_source = Some(v.parse::<bool>().unwrap_or(true));
+                } else if i + 1 < raw_tokens.len()
+                    && (raw_tokens[i + 1] == "true" || raw_tokens[i + 1] == "false")
+                {
+                    i += 1;
+                    cfg.allow_empty_source = Some(raw_tokens[i] == "true");
+                } else if i + 2 < raw_tokens.len()
+                    && raw_tokens[i + 1] == "="
+                    && (raw_tokens[i + 2] == "true" || raw_tokens[i + 2] == "false")
+                {
+                    i += 2;
+                    cfg.allow_empty_source = Some(raw_tokens[i] == "true");
+                } else {
+                    cfg.allow_empty_source = Some(true);
+                }
+            }
+            "allow-missing-source" | "allow_missing_source" => {
+                if let Some(v) = inline_val {
+                    cfg.allow_missing_source = Some(v.parse::<bool>().unwrap_or(true));
+                } else if i + 1 < raw_tokens.len()
+                    && (raw_tokens[i + 1] == "true" || raw_tokens[i + 1] == "false")
+                {
+                    i += 1;
+                    cfg.allow_missing_source = Some(raw_tokens[i] == "true");
+                } else if i + 2 < raw_tokens.len()
+                    && raw_tokens[i + 1] == "="
+                    && (raw_tokens[i + 2] == "true" || raw_tokens[i + 2] == "false")
+                {
+                    i += 2;
+                    cfg.allow_missing_source = Some(raw_tokens[i] == "true");
+                } else {
+                    cfg.allow_missing_source = Some(true);
                 }
             }
             "dry-run" | "dry_run" => {
@@ -382,42 +506,42 @@ pub fn parse_cli_or_keyval_config(content: &str) -> Result<ConfigFile, String> {
                         .map_err(|e| format!("Invalid max-versions '{}': {}", v, e))?,
                 );
             }
-            "keep-hourly" | "keep_hourly" => {
+            "keep-hourly" | "keep_hourly" | "hourly" => {
                 let v = get_val(&mut i, inline_val)?;
                 cfg.keep_hourly = Some(
                     v.parse::<usize>()
                         .map_err(|e| format!("Invalid keep-hourly '{}': {}", v, e))?,
                 );
             }
-            "keep-daily" | "keep_daily" => {
+            "keep-daily" | "keep_daily" | "daily" => {
                 let v = get_val(&mut i, inline_val)?;
                 cfg.keep_daily = Some(
                     v.parse::<usize>()
                         .map_err(|e| format!("Invalid keep-daily '{}': {}", v, e))?,
                 );
             }
-            "keep-weekly" | "keep_weekly" => {
+            "keep-weekly" | "keep_weekly" | "weekly" => {
                 let v = get_val(&mut i, inline_val)?;
                 cfg.keep_weekly = Some(
                     v.parse::<usize>()
                         .map_err(|e| format!("Invalid keep-weekly '{}': {}", v, e))?,
                 );
             }
-            "keep-monthly" | "keep_monthly" => {
+            "keep-monthly" | "keep_monthly" | "monthly" => {
                 let v = get_val(&mut i, inline_val)?;
                 cfg.keep_monthly = Some(
                     v.parse::<usize>()
                         .map_err(|e| format!("Invalid keep-monthly '{}': {}", v, e))?,
                 );
             }
-            "keep-yearly" | "keep_yearly" => {
+            "keep-yearly" | "keep_yearly" | "yearly" => {
                 let v = get_val(&mut i, inline_val)?;
                 cfg.keep_yearly = Some(
                     v.parse::<usize>()
                         .map_err(|e| format!("Invalid keep-yearly '{}': {}", v, e))?,
                 );
             }
-            "target-time" | "target_time" => {
+            "target-time" | "target_time" | "time" | "t" | "snapshot" => {
                 let v = get_val(&mut i, inline_val)?;
                 cfg.target_time = Some(v);
             }
@@ -429,7 +553,7 @@ pub fn parse_cli_or_keyval_config(content: &str) -> Result<ConfigFile, String> {
                 let v = get_val(&mut i, inline_val)?;
                 cfg.command = Some(v);
             }
-            "auto" | "create" | "prune" | "restore" | "list" | "manual" | "man"
+            "auto" | "create" | "prune" | "restore" | "list" | "ls" | "manual" | "man"
                 if !tok.starts_with('-') =>
             {
                 cfg.command = Some(tok.to_string());

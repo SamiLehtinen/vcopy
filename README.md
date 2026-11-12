@@ -59,13 +59,13 @@ find /home/user/code -name "*.rs" | vcopy -f - -d /mnt/usb/backup
 
 ---
 
-### 3. Numbered Versions in a Flat Directory (`--flatten`)
-When you want all files in a single flat folder without nested subfolders (ideal for flat USB thumb drives, camera ingest dropboxes, or single-folder cloud storage), use `--flatten`.
+### 3. Numbered Versions in a Flat Directory (`--flat`)
+When you want all files in a single flat folder without nested subfolders (ideal for flat USB thumb drives, camera ingest dropboxes, or single-folder cloud storage), use `--flat` (or `--flatten`):
 
 Every file is placed directly in the destination root. Historical revisions receive monotonic numbered version suffixes (`.v0`, `.v1`, `.v2`, ...):
 
 ```bash
-vcopy --flatten /home/user/docs /home/user/photos /mnt/usb/backup
+vcopy --flat /home/user/docs /home/user/photos /mnt/usb/backup
 ```
 
 **Destination structure with numbered versions:**
@@ -179,24 +179,28 @@ vcopy [OPTIONS] [SOURCES... DEST]... [COMMAND]
 | `-d, --dest` | `<PATH>` | None | Destination backup directory (overrides positional destination or config setting). *(Alias: `--destination`)* |
 | `-f, --paths-from` | `<PATTERN>` or `-` | None | Read source paths from text file, file glob (e.g. `backups*`), or stdin (`-`). Can be specified multiple times or comma-separated. *(Aliases: `--files-from`, `--sources-from`)* |
 | `-c, --config` | `<FILE>` | None | Path to configuration file. Accepts direct CLI arguments format (exact same flags/args as command line), key-value, TOML, or JSON. |
-| `--flatten` | Flag | `false` | Single-directory flat mode: stores all live and historical files in root using `.v0`, `.v1` version numbers. |
-| `-p, --preserve-permissions` | Flag | `false` | Record POSIX file modes (Unix) and readonly attributes (Windows) in manifests and restore them. |
+| `--flat` | Flag | `false` | Single-directory flat mode: stores all live and historical files in root using `.v0`, `.v1` version numbers. *(Alias: `--flatten`)* |
+| `-p, --perms` | Flag | `false` | Record POSIX file modes (Unix) and readonly attributes (Windows) in manifests and restore them. *(Aliases: `--preserve-permissions`, `--permissions`)* |
+| `-t, --time` | `<TIMESTAMP>` | `latest` | Point-in-time timestamp (`YYYY-MM-DD_HHMMSS` or prefix) or `latest` for `restore`. *(Aliases: `--target-time`, `--snapshot`)* |
+| `-F, --force` | Flag | `false` | Force execution, bypassing safety circuit breakers (100% loss, foreign directory, missing source). |
+| `--allow-existing` | Flag | `false` | Allow destination or restore output directory to contain pre-existing foreign files without failing. |
+| `--allow-empty-source` | Flag | `false` | Allow empty source without tripping the 100% deletion safety circuit breaker. |
+| `--allow-missing-source` | Flag | `false` | Allow missing source paths without aborting the backup run. |
 | `--dry-run` | Flag | `false` | Simulate execution and display planned operations without modifying the filesystem. |
 | `-v, --verbose` | Flag | `false` | Print detailed information about copied, modified, and deleted files. |
-| `--target-time` | `<TIMESTAMP>` | `latest` | Point-in-time timestamp (`YYYY-MM-DD_HHMMSS` or prefix) for `restore`. |
 | `--manual` | Flag | | Print the complete user manual in ASCII / man-page format. *(Alias: `--man`)* |
 | `--manual-markdown` | Flag | | Print the complete user manual in Markdown format. *(Aliases: `--manual-md`, `--markdown`)* |
 
 ### Retention Policy Options (GFS & Count)
 
-| Option | Shorthand | Default | Description |
+| Option | Shorthand / Aliases | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `--max-versions` | `-n` | None | Retain only the newest $N$ snapshots (overrides GFS). |
-| `--keep-hourly` | | 24 | Retain one snapshot per hour for the past $N$ hours. |
-| `--keep-daily` | | 7 | Retain one snapshot per day for the past $N$ days. |
-| `--keep-weekly` | | 4 | Retain one snapshot per week for the past $N$ weeks. |
-| `--keep-monthly` | | 12 | Retain one snapshot per month for the past $N$ months. |
-| `--keep-yearly` | | 1 | Retain one snapshot per year for the past $N$ years. |
+| `--keep-hourly` | `--hourly` | 24 | Retain one snapshot per hour for the past $N$ hours. |
+| `--keep-daily` | `--daily` | 7 | Retain one snapshot per day for the past $N$ days. |
+| `--keep-weekly` | `--weekly` | 4 | Retain one snapshot per week for the past $N$ weeks. |
+| `--keep-monthly` | `--monthly` | 12 | Retain one snapshot per month for the past $N$ months. |
+| `--keep-yearly` | `--yearly` | 1 | Retain one snapshot per year for the past $N$ years. |
 
 ---
 
@@ -234,15 +238,16 @@ A standard UNIX man page is also included at [`docs/vcopy.1`](docs/vcopy.1) and 
   vcopy create /source /dest
   ```
 - **`restore`**:
-  Restores files from destination to a specified target directory from `latest` or `--target-time <TIMESTAMP>`:
+  Restores files from destination to a specified target directory from `latest` or `-t / --time <TIMESTAMP>`:
   ```bash
   vcopy restore /dest /output_dir
-  vcopy restore --target-time 2026-11-09_083000 /dest /output_dir
+  vcopy restore -t 2026-11-09_083000 /dest /output_dir
   ```
-- **`list`**:
+- **`list`** *(alias: `ls`)*:
   Displays all historical snapshots, transfer statistics, and timestamps:
   ```bash
   vcopy list /dest
+  vcopy ls /dest
   ```
 - **`prune`**:
   Manually prunes historical snapshots according to retention rules with reverse-delta consolidation:
@@ -358,7 +363,7 @@ Ideal for traditional backups where the directory tree is preserved and displace
             └── old_file.txt.deleted    # Zero-byte deletion marker
 ```
 
-### 2. Single-Directory Flat Mode (`--flatten`)
+### 2. Single-Directory Flat Mode (`--flat`)
 Ideal when you need all files in a single flat folder (e.g. flat USB drives, photo ingest dropboxes, single-folder cloud buckets):
 
 ```text
@@ -382,6 +387,11 @@ Ideal when you need all files in a single flat folder (e.g. flat USB drives, pho
 * **Directly Browseable Destination**: Live mirror files remain raw, uncompressed, and directly readable in any standard OS file manager without proprietary archive extractors.
 * **Atomic Staging Writes**: Writes all file copies and manifests through temporary files (`.<file>.tmp.<pid>.<id>`) and atomically renames them into place to prevent corruption upon abrupt power loss or cancellation.
 * **Nanosecond Timestamps & SIMD CRC32**: Overcomes FAT/exFAT 2-second timestamp drift by persisting exact nanosecond modification timestamps (`mtime_ns`) and fast SIMD CRC32 hashes in metadata manifests.
+* **Safety Circuit Breakers & Path Guards**:
+  * **100% Deletion Wipeout Prevention**: If source path is empty, unmounted, or yields 0 files while the destination contains existing files, `vcopy` refuses to wipe the destination, aborting with a safety error unless explicitly overridden with `--allow-empty-source` or `-F / --force`.
+  * **Missing / Unmounted Source Guard**: If any source directory does not exist or has become unavailable (e.g. unmounted network or USB drive), `vcopy` halts before executing destructive file displacements unless `--allow-missing-source` or `-F / --force` is passed.
+  * **Protected Directory Guards**: Refuses to sync or restore directly into system root (`/`), core system paths (`/etc`, `/usr`, `/bin`, `C:\Windows`, etc.), user home directory root (`$HOME`, `~`), or populated foreign directories lacking `vcopy` repository metadata unless overridden with `--allow-existing` or `-F / --force`.
+* **Heuristic Orphan Scan Recovery**: If metadata files (`manifest.json`, `baseline.json`, or `.version-history.manifest.jsonl`) are deleted or corrupted, `vcopy` automatically scans disk, reconstructs snapshots from displaced files, `.deleted` markers, and `.v<N>` version numbers, restoring point-in-time recovery capabilities in both hierarchical and flat modes.
 * **Safe Pruning (Reverse-Delta Consolidation)**: Pruning intermediate snapshots migrates displaced files needed by surviving older snapshots before deletion, guaranteeing point-in-time restore integrity across GFS retention cycles.
 * **Non-Blocking Resilient Advisory Locking**: Uses advisory locking (`.version-history/.lock` or `.version-history.lock`) to block overlapping concurrent runs, falling back automatically to an atomic PID-file lock on filesystems that do not support POSIX `flock` (e.g. FUSE mounts).
 

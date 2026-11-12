@@ -874,7 +874,7 @@ fn test_manual_embedded_ascii_and_markdown() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("VCOPY(1)"));
     assert!(stdout.contains("QUICK START & SIMPLE EXAMPLES"));
-    assert!(stdout.contains("Numbered Versions in a Flat Directory (--flatten)"));
+    assert!(stdout.contains("Numbered Versions in a Flat Directory"));
     assert!(stdout.contains("Zero-Obfuscation Configuration Files"));
 
     // 2. Test --manual-markdown flag
@@ -1185,4 +1185,202 @@ fn test_orphan_scan_recovery_hierarchical_mode() {
         fs::read(ctx.dst.join("file1.txt")).unwrap(),
         b"hierarchical file 1 v3"
     );
+}
+
+#[test]
+fn test_total_wipeout_circuit_breaker() {
+    let ctx = TestContext::new("circuit_breaker");
+    ctx.write_src_file("file1.txt", b"first file");
+    ctx.write_src_file("file2.txt", b"second file");
+
+    // 1. Initial backup
+    let st = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st.success());
+    assert!(ctx.dst.join("file1.txt").exists());
+    assert!(ctx.dst.join("file2.txt").exists());
+
+    // 2. Remove all source files (simulating unmounted / cleared drive, 100% loss)
+    fs::remove_file(ctx.src.join("file1.txt")).unwrap();
+    fs::remove_file(ctx.src.join("file2.txt")).unwrap();
+
+    // 3. Attempt sync - must be blocked by safety circuit breaker
+    let output = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Safety circuit breaker") || stderr.contains("100%"),
+        "stderr should mention circuit breaker: {}",
+        stderr
+    );
+
+    // Destination files must remain intact
+    assert!(ctx.dst.join("file1.txt").exists());
+    assert!(ctx.dst.join("file2.txt").exists());
+
+    // 4. Run with --allow-empty-source - should succeed and archive/displace
+    let st_allowed = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--allow-empty-source")
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st_allowed.success());
+    assert!(!ctx.dst.join("file1.txt").exists());
+    assert!(!ctx.dst.join("file2.txt").exists());
+
+    // Verify files were archived in snapshot
+    let hist_dir = ctx.dst.join(".version-history");
+    assert!(hist_dir.is_dir());
+}
+
+#[test]
+fn test_missing_source_path_protection() {
+    let ctx = TestContext::new("missing_src");
+    let missing_src = ctx.dir.join("nonexistent_directory");
+
+    // Attempt backup with missing source path
+    let output = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&missing_src)
+        .arg(&ctx.dst)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("does not exist or is unavailable"),
+        "stderr should mention missing source: {}",
+        stderr
+    );
+
+    // With --force, the missing source check is bypassed
+    let st_forced = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--force")
+        .arg(&missing_src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st_forced.success());
+}
+
+#[test]
+fn test_destination_safety_guards() {
+    let ctx = TestContext::new("dest_guards");
+    ctx.write_src_file("sample.txt", b"sample content");
+
+    // 1. Refuse system directory (/etc or /usr)
+    let output_etc = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg("/etc")
+        .output()
+        .unwrap();
+    assert!(!output_etc.status.success());
+    let stderr_etc = String::from_utf8_lossy(&output_etc.stderr);
+    assert!(
+        stderr_etc.contains("refusing to use system or root directory"),
+        "stderr: {}",
+        stderr_etc
+    );
+
+    // 2. Refuse foreign non-empty directory without --allow-existing
+    let foreign_dir = ctx.dir.join("foreign_dir");
+    fs::create_dir_all(&foreign_dir).unwrap();
+    fs::write(foreign_dir.join("unrelated_file.doc"), b"do not touch").unwrap();
+
+    let output_foreign = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg(&foreign_dir)
+        .output()
+        .unwrap();
+    assert!(!output_foreign.status.success());
+    let stderr_foreign = String::from_utf8_lossy(&output_foreign.stderr);
+    assert!(
+        stderr_foreign.contains("contains non-vcopy files, but has no vcopy repository metadata"),
+        "stderr: {}",
+        stderr_foreign
+    );
+
+    // With --allow-existing, backup succeeds into the existing directory
+    let st_foreign_allowed = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--allow-existing")
+        .arg(&ctx.src)
+        .arg(&foreign_dir)
+        .status()
+        .unwrap();
+    assert!(st_foreign_allowed.success());
+    assert!(foreign_dir.join("sample.txt").exists());
+    // In hierarchical sync, destination mirrors source; foreign unrelated file is safely displaced to .version-history/
+    assert!(foreign_dir.join(".version-history").is_dir());
+}
+
+#[test]
+fn test_shorter_cli_flags_and_aliases() {
+    let ctx = TestContext::new("shorter_flags");
+    ctx.write_src_file("alpha.txt", b"content alpha");
+
+    // 1. Test --flat (shortened for --flatten)
+    let st_flat = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--flat")
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st_flat.success());
+    assert!(ctx.dst.join("alpha.txt").exists());
+    assert!(ctx.dst.join(".version-history.manifest.jsonl").exists());
+
+    // 2. Test 'ls' subcommand alias for 'list'
+    let output_ls = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("ls")
+        .arg(&ctx.dst)
+        .output()
+        .unwrap();
+    assert!(output_ls.status.success());
+    let stdout_ls = String::from_utf8_lossy(&output_ls.stdout);
+    assert!(
+        stdout_ls.contains("Snapshot (flat)"),
+        "stdout should contain flat header: {}",
+        stdout_ls
+    );
+
+    // 3. Test restore with short flag -t and alias 'snapshot'
+    let restore_out = ctx.dir.join("restore_out");
+    let st_restore = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("restore")
+        .arg("-t")
+        .arg("latest")
+        .arg(&ctx.dst)
+        .arg(&restore_out)
+        .status()
+        .unwrap();
+    assert!(st_restore.success());
+    assert_eq!(
+        fs::read(restore_out.join("alpha.txt")).unwrap(),
+        b"content alpha"
+    );
+
+    // 4. Test retention aliases (--hourly, --daily, --weekly, --monthly, --yearly)
+    let st_prune = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("prune")
+        .arg("--hourly")
+        .arg("10")
+        .arg("--daily")
+        .arg("5")
+        .arg("--weekly")
+        .arg("2")
+        .arg("--monthly")
+        .arg("6")
+        .arg("--yearly")
+        .arg("1")
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st_prune.success());
 }

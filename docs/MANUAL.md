@@ -60,13 +60,13 @@ find /home/user/code -name "*.rs" | vcopy -f - -d /mnt/usb/backup
 
 ---
 
-### 3. Numbered Versions in a Flat Directory (`--flatten`)
-If you want all files in a single flat directory without subfolder hierarchies (ideal for flat USB thumb drives, camera card ingests, or single-folder cloud storage), use `--flatten`.
+### 3. Numbered Versions in a Flat Directory (`--flat`)
+If you want all files in a single flat directory without subfolder hierarchies (ideal for flat USB thumb drives, camera card ingests, or single-folder cloud storage), use `--flat` (or `--flatten`).
 
 Every file is placed directly in the destination root. Historical revisions receive monotonic numbered version suffixes (`.v0`, `.v1`, `.v2`, ...):
 
 ```bash
-vcopy --flatten /home/user/docs /home/user/photos /mnt/usb/backup
+vcopy --flat /home/user/docs /home/user/photos /mnt/usb/backup
 ```
 
 **Destination structure with numbered versions:**
@@ -186,24 +186,28 @@ vcopy prune -n 5 --dry-run -v /mnt/usb/backup
 | `--dest` | `-d` | `<PATH>` | None | Destination backup directory. *(Alias: `--destination`)* |
 | `--paths-from` | `-f` | `<PATTERN>` | None | Read source paths from text file, file glob (e.g. `backups*`), or stdin (`-`). *(Aliases: `--files-from`, `--sources-from`)* |
 | `--config` | `-c` | `<FILE>` | None | Path to configuration file (direct CLI args format, key-value, TOML, or JSON). |
-| `--flatten` | | Flag | `false` | Single-directory flat mode: stores all live and historical files in root using `.v0`, `.v1` version numbers. |
-| `--preserve-permissions` | `-p` | Flag | `false` | Record POSIX mode bits (Unix) and readonly attributes (Windows) in manifests and restore them. |
+| `--flat` | | Flag | `false` | Single-directory flat mode: stores all live and historical files in root using `.v0`, `.v1` version numbers. *(Alias: `--flatten`)* |
+| `--perms` | `-p` | Flag | `false` | Record POSIX mode bits (Unix) and readonly attributes (Windows) in manifests and restore them. *(Aliases: `--preserve-permissions`, `--permissions`)* |
+| `--time` | `-t` | `<TIMESTAMP>` | `latest` | Snapshot timestamp (`YYYY-MM-DD_HHMMSS` or prefix) or `latest` for `restore`. *(Aliases: `--target-time`, `--snapshot`)* |
+| `--force` | `-F` | Flag | `false` | Force execution, bypassing safety circuit breakers (100% loss, foreign directory, missing source). |
+| `--allow-existing` | | Flag | `false` | Allow destination or restore output directory to contain pre-existing foreign files. |
+| `--allow-empty-source` | | Flag | `false` | Allow empty source without tripping the 100% deletion safety circuit breaker. |
+| `--allow-missing-source` | | Flag | `false` | Allow missing source paths without aborting the backup run. |
 | `--dry-run` | | Flag | `false` | Simulate execution and display planned operations without writing to disk. |
 | `--verbose` | `-v` | Flag | `false` | Enable detailed output listing every copied, modified, or deleted file. |
-| `--target-time` | | `<TIMESTAMP>` | `latest` | Snapshot timestamp (`YYYY-MM-DD_HHMMSS` or prefix) for `restore`. |
 | `--manual` | | Flag | | Print this complete user manual in ASCII / man-page format. *(Alias: `--man`)* |
 | `--manual-markdown` | | Flag | | Print this complete user manual in Markdown format. *(Aliases: `--manual-md`, `--markdown`)* |
 
 ### Retention Policy Options (GFS & Count)
 
-| Option | Shorthand | Default | Description |
+| Option | Shorthand / Aliases | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `--max-versions` | `-n` | None | Retain only the newest $N$ snapshots (overrides GFS schedules). |
-| `--keep-hourly` | | 24 | Number of hourly snapshot buckets to retain. |
-| `--keep-daily` | | 7 | Number of daily snapshot buckets to retain. |
-| `--keep-weekly` | | 4 | Number of weekly snapshot buckets to retain. |
-| `--keep-monthly` | | 12 | Number of monthly snapshot buckets to retain. |
-| `--keep-yearly` | | 1 | Number of yearly snapshot buckets to retain. |
+| `--keep-hourly` | `--hourly` | 24 | Number of hourly snapshot buckets to retain. |
+| `--keep-daily` | `--daily` | 7 | Number of daily snapshot buckets to retain. |
+| `--keep-weekly` | `--weekly` | 4 | Number of weekly snapshot buckets to retain. |
+| `--keep-monthly` | `--monthly` | 12 | Number of monthly snapshot buckets to retain. |
+| `--keep-yearly` | `--yearly` | 1 | Number of yearly snapshot buckets to retain. |
 
 ---
 
@@ -214,12 +218,12 @@ vcopy prune -n 5 --dry-run -v /mnt/usb/backup
 - **`create`**:
   Creates a new backup snapshot without running retention pruning.
 - **`restore`**:
-  Restores files from destination to a specified target directory from `latest` or `--target-time <TIMESTAMP>`.
-- **`list`**:
+  Restores files from destination to a specified target directory from `latest` or `-t / --time <TIMESTAMP>`.
+- **`list`** *(alias: `ls`)*:
   Lists all historical snapshots, file counts, and transferred bytes.
 - **`prune`**:
   Manually prunes historical snapshots according to retention rules with reverse-delta consolidation.
-- **`manual`**:
+- **`manual`** *(alias: `man`)*:
   Displays this complete user guide. Use `--markdown` for Markdown output.
 
 ---

@@ -34,7 +34,7 @@ pub struct PruneOptions {
 }
 
 pub fn run_prune(opts: &PruneOptions, dest: &Path) -> io::Result<()> {
-    validate_dest_path(dest)?;
+    validate_dest_path(dest, true)?;
 
     if is_flat_repo(dest) {
         return run_prune_flat(opts, dest);

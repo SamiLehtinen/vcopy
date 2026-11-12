@@ -58,15 +58,15 @@ QUICK START & SIMPLE EXAMPLES
            # Pipe paths directly from find via standard input ('-')
            $ find /home/user/code -name "*.rs" | vcopy -f - -d /mnt/usb/backup
 
-   3. Numbered Versions in a Flat Directory (--flatten)
+   3. Numbered Versions in a Flat Directory (--flat)
        When you want all files in a single flat directory without nested
        subfolders (ideal for flat USB drives, camera card ingests, or single-
-       folder cloud buckets), use --flatten.
+       folder cloud buckets), use --flat (or --flatten).
 
        Every file is placed directly in the destination root. Historical
        revisions receive monotonic numbered version suffixes (.v0, .v1, ...):
 
-           $ vcopy --flatten /home/user/docs /home/user/photos /mnt/usb/backup
+           $ vcopy --flat /home/user/docs /home/user/photos /mnt/usb/backup
 
        Destination layout with numbered versions:
            /mnt/usb/backup/
@@ -169,13 +169,35 @@ OPTIONS
               Path to configuration file. Accepts direct CLI arguments format,
               plain key-value, TOML, or JSON.
 
-       --flatten
+       --flat
               Single-directory flat mode: stores all live and historical files
               directly in destination root using .v0, .v1 version numbers.
+              Alias: --flatten.
 
-       -p, --preserve-permissions
+       -p, --perms
               Record POSIX mode bits (Unix) and readonly attributes (Windows)
               in manifests and restore them on compatible filesystems.
+              Aliases: --preserve-permissions, --permissions.
+
+       -t, --time <TIMESTAMP>
+              Target snapshot timestamp (YYYY-MM-DD_HHMMSS or prefix) or
+              'latest' for restore.
+              Aliases: --target-time, --snapshot.
+
+       -F, --force
+              Force execution, bypassing safety circuit breakers (100% loss,
+              foreign directory, missing source).
+
+       --allow-existing
+              Allow destination or restore target directory to contain pre-
+              existing foreign files without error.
+
+       --allow-empty-source
+              Allow empty source without tripping the 100% deletion safety
+              circuit breaker.
+
+       --allow-missing-source
+              Allow missing source paths without aborting the backup run.
 
        --dry-run
               Simulate execution and display planned operations without
@@ -184,10 +206,6 @@ OPTIONS
        -v, --verbose
               Enable detailed output listing every copied, modified, and
               deleted file.
-
-       --target-time <TIMESTAMP>
-              Target snapshot timestamp (YYYY-MM-DD_HHMMSS or prefix) or
-              'latest' for restore.
 
        --manual, --man
               Print this complete user manual in ASCII / man-page format.
@@ -199,19 +217,19 @@ OPTIONS
        -n, --max-versions <N>
               Retain only the newest N snapshots (overrides GFS).
 
-       --keep-hourly <N>
+       --keep-hourly <N>, --hourly <N>
               Number of hourly snapshot buckets to retain (default: 24).
 
-       --keep-daily <N>
+       --keep-daily <N>, --daily <N>
               Number of daily snapshot buckets to retain (default: 7).
 
-       --keep-weekly <N>
+       --keep-weekly <N>, --weekly <N>
               Number of weekly snapshot buckets to retain (default: 4).
 
-       --keep-monthly <N>
+       --keep-monthly <N>, --monthly <N>
               Number of monthly snapshot buckets to retain (default: 12).
 
-       --keep-yearly <N>
+       --keep-yearly <N>, --yearly <N>
               Number of yearly snapshot buckets to retain (default: 1).
 
 SUBCOMMANDS
@@ -223,10 +241,15 @@ SUBCOMMANDS
 
        restore
               Restore files from destination to a target directory.
+              Use -t / --time <TIMESTAMP> to select a point in time.
 
-       list   List all snapshots in destination with summary statistics.
+       list, ls
+              List all snapshots in destination with summary statistics.
 
        prune  Manually prune snapshots according to retention rules.
+
+       manual, man
+              Display this complete user manual. Use --markdown for markdown.
 
        manual
               Display the user manual. Add --markdown for Markdown output.
