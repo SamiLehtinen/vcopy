@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use walkdir::WalkDir;
 
 use crate::history::{
-    is_flat_repo, list_snapshots, load_baseline, load_flat_manifest, load_manifest,
+    is_flat_repo, list_snapshots, load_baseline, load_flat_manifest, load_manifest, SnapshotInfo,
 };
 use crate::models::{FileState, FlatManifest};
 use crate::util::{
@@ -113,6 +113,25 @@ pub fn run_restore(opts: &RestoreOptions, dest: &Path, target_out: &Path) -> io:
                 if meta.file_type().is_file() {
                     source_to_copy = Some(live_candidate);
                 }
+            }
+        }
+
+        // 3. Fallback: Orphan scan recovery in hierarchical snapshots and live mirror
+        if source_to_copy.is_none() {
+            if let Some(recovered) = scan_recover_hierarchical_file(
+                dest,
+                &snapshots[chosen_idx..],
+                state.size,
+                state.crc32,
+            ) {
+                if opts.verbose {
+                    println!(
+                        "Scan recovered backing file for '{}' -> {}",
+                        state.path,
+                        recovered.display()
+                    );
+                }
+                source_to_copy = Some(recovered);
             }
         }
 
@@ -412,6 +431,68 @@ fn scan_recover_file(
                         }
                     } else {
                         return Some(p);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn scan_recover_hierarchical_file(
+    dest: &Path,
+    active_snapshots: &[SnapshotInfo],
+    expected_size: u64,
+    expected_crc32: Option<u32>,
+) -> Option<PathBuf> {
+    for snap in active_snapshots {
+        for entry in WalkDir::new(&snap.path).min_depth(1).into_iter().flatten() {
+            if entry.file_type().is_file() {
+                let p = entry.path();
+                let name = p
+                    .file_name()
+                    .map(|s| s.to_string_lossy())
+                    .unwrap_or_default();
+                if name == "manifest.json" || name.ends_with(".deleted") {
+                    continue;
+                }
+                if let Ok(meta) = p.metadata() {
+                    if meta.len() == expected_size {
+                        if let Some(crc) = expected_crc32 {
+                            if compute_file_crc32(p).ok() == Some(crc) {
+                                return Some(p.to_path_buf());
+                            }
+                        } else {
+                            return Some(p.to_path_buf());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let hist_dir = dest.join(".version-history");
+    for entry in WalkDir::new(dest).min_depth(1).into_iter().flatten() {
+        let p = entry.path();
+        if p.starts_with(&hist_dir) {
+            continue;
+        }
+        if entry.file_type().is_file() {
+            let rel = match p.strip_prefix(dest) {
+                Ok(r) => r.to_string_lossy(),
+                Err(_) => continue,
+            };
+            if !is_safe_relative_path(&rel) {
+                continue;
+            }
+            if let Ok(meta) = p.metadata() {
+                if meta.len() == expected_size {
+                    if let Some(crc) = expected_crc32 {
+                        if compute_file_crc32(p).ok() == Some(crc) {
+                            return Some(p.to_path_buf());
+                        }
+                    } else {
+                        return Some(p.to_path_buf());
                     }
                 }
             }

@@ -17,7 +17,8 @@ use crate::models::{FileChange, FileState, FlatManifest, RunSummary, SnapshotMan
 use crate::util::{
     build_mappings, cleanup_empty_parents, compute_file_crc32, copy_atomic, get_file_metadata,
     get_file_permissions, is_reserved_flat_name, is_safe_flat_filename, is_safe_relative_path,
-    normalize_rel_path, sanitize_segment, split_stem_ext, validate_sync_paths,
+    normalize_rel_path, parse_version_filename, sanitize_segment, split_stem_ext,
+    validate_sync_paths,
 };
 
 static COPY_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -454,6 +455,13 @@ fn run_create_flat(
                 if file_type.is_file() {
                     let name = entry.file_name().to_string_lossy().to_string();
                     if is_reserved_flat_name(&name) || !is_safe_flat_filename(&name) {
+                        continue;
+                    }
+                    if let Some((base_name, v_num)) = parse_version_filename(&name) {
+                        let cur = version_counters.entry(base_name).or_insert(0);
+                        if v_num > *cur {
+                            *cur = v_num;
+                        }
                         continue;
                     }
                     if let Ok((size, mtime_ns, _)) = get_file_metadata(&entry.path()) {

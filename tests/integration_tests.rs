@@ -967,3 +967,222 @@ fn test_manifest_metadata_comment() {
     let flat_first_lines: Vec<&str> = flat_baseline_raw.lines().take(4).collect();
     assert!(flat_first_lines.join("\n").contains("\"_comment\""));
 }
+
+#[test]
+fn test_orphan_scan_recovery_flat_mode() {
+    let ctx = TestContext::new("orphan_flat");
+    ctx.write_src_file("doc1.txt", b"doc 1 original v1");
+    ctx.write_src_file("doc2.txt", b"doc 2 original v1");
+
+    // 1. Initial backup in flat mode
+    let st1 = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--flatten")
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st1.success());
+
+    thread::sleep(Duration::from_millis(1050));
+    // 2. Modify doc1 to create .v1 file in flat root
+    ctx.write_src_file("doc1.txt", b"doc 1 updated v2");
+    let st2 = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st2.success());
+
+    assert!(ctx.dst.join("doc1.v1.txt").is_file());
+    assert_eq!(
+        fs::read(ctx.dst.join("doc1.v1.txt")).unwrap(),
+        b"doc 1 original v1"
+    );
+    assert_eq!(
+        fs::read(ctx.dst.join("doc1.txt")).unwrap(),
+        b"doc 1 updated v2"
+    );
+
+    // 3. Intentionally DESTROY all metadata files
+    let baseline_json = ctx.dst.join(".version-history.baseline.json");
+    let manifest_jsonl = ctx.dst.join(".version-history.manifest.jsonl");
+    assert!(baseline_json.is_file());
+    assert!(manifest_jsonl.is_file());
+    fs::remove_file(&baseline_json).unwrap();
+    fs::remove_file(&manifest_jsonl).unwrap();
+
+    // 4. Verify vcopy list auto-recovers the flat manifest from orphan .v1 files
+    let list_out = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("list")
+        .arg(&ctx.dst)
+        .output()
+        .unwrap();
+    assert!(list_out.status.success());
+    let list_stdout = String::from_utf8_lossy(&list_out.stdout);
+    assert!(
+        list_stdout.contains("Snapshot (flat)"),
+        "list output should detect flat repo and show header: {}",
+        list_stdout
+    );
+    assert!(
+        baseline_json.is_file(),
+        "baseline.json should be automatically reconstructed"
+    );
+    assert!(
+        manifest_jsonl.is_file(),
+        "manifest.jsonl should be automatically reconstructed"
+    );
+
+    // 5. Verify restore latest works from recovered manifest
+    let restore_latest_out = ctx.dir.join("restored_latest");
+    let st_rest = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("restore")
+        .arg(&ctx.dst)
+        .arg(&restore_latest_out)
+        .status()
+        .unwrap();
+    assert!(st_rest.success());
+    assert_eq!(
+        fs::read(restore_latest_out.join("doc1.txt")).unwrap(),
+        b"doc 1 updated v2"
+    );
+    assert_eq!(
+        fs::read(restore_latest_out.join("doc2.txt")).unwrap(),
+        b"doc 2 original v1"
+    );
+
+    // 6. Verify subsequent backup continues monotonic version numbering (.v2, NOT clobbering .v1)
+    thread::sleep(Duration::from_millis(1050));
+    ctx.write_src_file("doc1.txt", b"doc 1 updated v3");
+    let st3 = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--max-versions")
+        .arg("10")
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st3.success());
+
+    assert!(ctx.dst.join("doc1.v1.txt").is_file());
+    assert_eq!(
+        fs::read(ctx.dst.join("doc1.v1.txt")).unwrap(),
+        b"doc 1 original v1"
+    );
+    assert!(
+        ctx.dst.join("doc1.v2.txt").is_file(),
+        "new version should be .v2, not colliding with .v1"
+    );
+    assert_eq!(
+        fs::read(ctx.dst.join("doc1.v2.txt")).unwrap(),
+        b"doc 1 updated v2"
+    );
+    assert_eq!(
+        fs::read(ctx.dst.join("doc1.txt")).unwrap(),
+        b"doc 1 updated v3"
+    );
+}
+
+#[test]
+fn test_orphan_scan_recovery_hierarchical_mode() {
+    let ctx = TestContext::new("orphan_hierarchical");
+    ctx.write_src_file("file1.txt", b"hierarchical file 1 v1");
+    ctx.write_src_file("to_delete.txt", b"hierarchical file to delete");
+
+    // 1. Initial backup
+    let st1 = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st1.success());
+
+    thread::sleep(Duration::from_millis(1050));
+    // 2. Modify file1 and delete to_delete.txt
+    ctx.write_src_file("file1.txt", b"hierarchical file 1 v2");
+    fs::remove_file(ctx.src.join("to_delete.txt")).unwrap();
+
+    let st2 = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st2.success());
+
+    let hist_dir = ctx.dst.join(".version-history");
+    let snapshots: Vec<_> = fs::read_dir(&hist_dir)
+        .unwrap()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .collect();
+    assert_eq!(snapshots.len(), 1);
+
+    let snap_dir = &snapshots[0].path();
+    let snap_name = snapshots[0].file_name().to_string_lossy().to_string();
+    assert!(snap_dir.join("file1.txt").is_file());
+    assert!(snap_dir.join("to_delete.txt.deleted").is_file());
+    assert!(snap_dir.join("manifest.json").is_file());
+    assert!(hist_dir.join("baseline.json").is_file());
+
+    // 3. Intentionally DESTROY manifest.json and baseline.json
+    fs::remove_file(snap_dir.join("manifest.json")).unwrap();
+    fs::remove_file(hist_dir.join("baseline.json")).unwrap();
+
+    // 4. Verify vcopy list auto-reconstructs manifest.json and baseline.json
+    let list_out = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("list")
+        .arg(&ctx.dst)
+        .output()
+        .unwrap();
+    assert!(list_out.status.success());
+    let list_stdout = String::from_utf8_lossy(&list_out.stdout);
+    assert!(
+        list_stdout.contains(&snap_name),
+        "list stdout should contain snapshot name: {}",
+        list_stdout
+    );
+    assert!(
+        snap_dir.join("manifest.json").is_file(),
+        "manifest.json should be auto-reconstructed"
+    );
+    assert!(
+        hist_dir.join("baseline.json").is_file(),
+        "baseline.json should be auto-reconstructed"
+    );
+
+    // Verify reconstructed manifest accurately captured displaced file and deleted marker
+    let reconstructed_manifest_raw = fs::read_to_string(snap_dir.join("manifest.json")).unwrap();
+    let reconstructed_json: serde_json::Value =
+        serde_json::from_str(&reconstructed_manifest_raw).unwrap();
+    assert_eq!(reconstructed_json["summary"]["files_modified"], 1);
+    assert_eq!(reconstructed_json["summary"]["files_deleted"], 1);
+
+    // 5. Verify point-in-time restore works from recovered snapshot
+    let pit_out = ctx.dir.join("restored_pit");
+    let st_pit = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("restore")
+        .arg("--target-time")
+        .arg(&snap_name)
+        .arg(&ctx.dst)
+        .arg(&pit_out)
+        .status()
+        .unwrap();
+    assert!(st_pit.success());
+    assert_eq!(
+        fs::read(pit_out.join("file1.txt")).unwrap(),
+        b"hierarchical file 1 v1"
+    );
+
+    // 6. Verify subsequent backup proceeds seamlessly against the recovered baseline
+    thread::sleep(Duration::from_millis(1050));
+    ctx.write_src_file("file1.txt", b"hierarchical file 1 v3");
+    let st3 = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st3.success());
+    assert_eq!(
+        fs::read(ctx.dst.join("file1.txt")).unwrap(),
+        b"hierarchical file 1 v3"
+    );
+}

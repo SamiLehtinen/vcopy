@@ -75,6 +75,40 @@ pub fn split_stem_ext(filename: &str) -> (&str, &str) {
     }
 }
 
+/// Parses a versioned flat filename such as "notes.v1.txt" into the base filename
+/// ("notes.txt") and the version counter (1).
+/// Supports extensions, compound extensions, and extensionless files (e.g. "script.v2").
+pub fn parse_version_filename(filename: &str) -> Option<(String, u64)> {
+    if !is_safe_flat_filename(filename) {
+        return None;
+    }
+    let (stem, ext) = split_stem_ext(filename);
+    // Case 1: filename has extension, and stem ends with .v<N> (e.g. "notes.v1.txt")
+    if let Some(v_idx) = stem.rfind(".v") {
+        let version_str = &stem[v_idx + 2..];
+        if !version_str.is_empty() && version_str.chars().all(|c| c.is_ascii_digit()) {
+            if let Ok(version_num) = version_str.parse::<u64>() {
+                let base_stem = &stem[..v_idx];
+                if !base_stem.is_empty() {
+                    let base_name = format!("{}{}", base_stem, ext);
+                    return Some((base_name, version_num));
+                }
+            }
+        }
+    }
+    // Case 2: filename has no trailing extension, so split_stem_ext treated .v<N> as ext (e.g. "script.v10")
+    if let Some(version_str) = ext.strip_prefix(".v") {
+        if !version_str.is_empty() && version_str.chars().all(|c| c.is_ascii_digit()) {
+            if let Ok(version_num) = version_str.parse::<u64>() {
+                if !stem.is_empty() {
+                    return Some((stem.to_string(), version_num));
+                }
+            }
+        }
+    }
+    None
+}
+
 pub fn is_reserved_flat_name(name: &str) -> bool {
     name == ".version-history.baseline.json"
         || name == ".version-history.manifest.jsonl"
@@ -610,4 +644,45 @@ pub fn build_mappings(sources: &[PathBuf], flatten: bool) -> Vec<SourceMapping> 
         });
     }
     map
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_version_filename() {
+        assert_eq!(
+            parse_version_filename("notes.v1.txt"),
+            Some(("notes.txt".to_string(), 1))
+        );
+        assert_eq!(
+            parse_version_filename("archive.tar.v3.gz"),
+            Some(("archive.tar.gz".to_string(), 3))
+        );
+        assert_eq!(
+            parse_version_filename("script.v10"),
+            Some(("script".to_string(), 10))
+        );
+        assert_eq!(
+            parse_version_filename("disambiguated_from_src.v0.json"),
+            Some(("disambiguated_from_src.json".to_string(), 0))
+        );
+        assert_eq!(
+            parse_version_filename("my.v1.file.v2.txt"),
+            Some(("my.v1.file.txt".to_string(), 2))
+        );
+
+        // Non-versioned files
+        assert_eq!(parse_version_filename("notes.txt"), None);
+        assert_eq!(parse_version_filename("script"), None);
+        assert_eq!(parse_version_filename("video.mp4"), None);
+        assert_eq!(parse_version_filename("release.v1.0.tar"), None);
+        assert_eq!(parse_version_filename("notes.v.txt"), None);
+        assert_eq!(parse_version_filename(".v1"), None);
+        assert_eq!(
+            parse_version_filename(".version-history.baseline.json"),
+            None
+        );
+    }
 }
