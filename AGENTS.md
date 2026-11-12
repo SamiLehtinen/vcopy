@@ -90,6 +90,8 @@ cross build --release --target aarch64-unknown-linux-musl
 
 ## 5. Coding & Contribution Rules
 
+* **Always Test Before Commit / Build:**
+  * Always run `cargo test`, `cargo fmt --all -- --check`, and `cargo clippy --all-targets -- -D warnings` before committing changes or producing release builds.
 * **Documentation Integrity:**
   * Keep [`docs/spec.md`](docs/spec.md) authoritative and synchronized with any architectural or protocol changes.
   * Keep [`README.md`](README.md) synchronized with user-facing options and release assets.
