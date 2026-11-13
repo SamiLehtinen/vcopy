@@ -201,6 +201,7 @@ fn test_restore_latest() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn test_restore_permissions_option() {
     let ctx = TestContext::new("perms_opt");
