@@ -326,3 +326,98 @@ fn test_flat_pruning_and_consolidation() {
         b"v2 content"
     );
 }
+
+#[test]
+fn test_gfs_multi_tier_buckets_and_dry_run() {
+    let ctx = TestContext::new("gfs_tiers");
+    ctx.write_src_file("data.txt", b"base");
+
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("create")
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap()
+        .success());
+
+    let hist_dir = ctx.dst.join(".version-history");
+    let template_manifest = fs::read_to_string(hist_dir.join("baseline.json")).unwrap();
+
+    // Create synthetic snapshots spanning multiple hours, days, weeks, months, and years:
+    // - Same hour (should keep latest 2025-06-20_104500, prune 2025-06-20_101500)
+    // - Earlier hour on same day (2025-06-20_080000 -> kept by daily or hourly if >1)
+    // - Earlier day in same week (2025-06-18_120000)
+    // - Earlier week in same month (2025-06-02_120000)
+    // - Earlier month in same year (2025-02-10_120000)
+    // - Earlier year (2024-05-01_120000)
+    let synthetic_snaps = [
+        "2024-05-01_120000",
+        "2025-02-10_120000",
+        "2025-06-02_120000",
+        "2025-06-18_120000",
+        "2025-06-20_080000",
+        "2025-06-20_101500",
+        "2025-06-20_104500",
+    ];
+
+    for snap in &synthetic_snaps {
+        let sdir = hist_dir.join(snap);
+        fs::create_dir_all(&sdir).unwrap();
+        fs::write(sdir.join("manifest.json"), &template_manifest).unwrap();
+        fs::write(sdir.join("data.txt"), snap.as_bytes()).unwrap();
+    }
+
+    // 1. Test --dry-run with -n 1: must NOT delete any snapshot directories
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("prune")
+        .arg("--dry-run")
+        .arg("-v")
+        .arg("-n")
+        .arg("1")
+        .arg(&ctx.dst)
+        .status()
+        .unwrap()
+        .success());
+    for snap in &synthetic_snaps {
+        assert!(
+            hist_dir.join(snap).is_dir(),
+            "dry-run must not delete {}",
+            snap
+        );
+    }
+
+    // 2. Run GFS prune with 1 bucket per tier:
+    // - hourly=1 keeps 2025-06-20_104500 (prunes 2025-06-20_101500 & 2025-06-20_080000 since daily bucket 2025-06-20 is already represented by 104500)
+    // - daily=2 keeps 2025-06-20_104500 and 2025-06-18_120000
+    // - weekly=2 keeps week of 2025-06-20 and week of 2025-06-02_120000
+    // - monthly=2 keeps 2025-06 and 2025-02-10_120000
+    // - yearly=2 keeps 2025 and 2024-05-01_120000
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("prune")
+        .arg("-v")
+        .arg("--keep-hourly")
+        .arg("1")
+        .arg("--keep-daily")
+        .arg("2")
+        .arg("--keep-weekly")
+        .arg("2")
+        .arg("--keep-monthly")
+        .arg("2")
+        .arg("--keep-yearly")
+        .arg("2")
+        .arg(&ctx.dst)
+        .status()
+        .unwrap()
+        .success());
+
+    // Redundant same-day/same-hour snapshots should be pruned
+    assert!(!hist_dir.join("2025-06-20_101500").exists());
+    assert!(!hist_dir.join("2025-06-20_080000").exists());
+
+    // Representatives of each GFS tier must survive
+    assert!(hist_dir.join("2025-06-20_104500").is_dir());
+    assert!(hist_dir.join("2025-06-18_120000").is_dir());
+    assert!(hist_dir.join("2025-06-02_120000").is_dir());
+    assert!(hist_dir.join("2025-02-10_120000").is_dir());
+    assert!(hist_dir.join("2024-05-01_120000").is_dir());
+}

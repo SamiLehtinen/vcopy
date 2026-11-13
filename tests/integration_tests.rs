@@ -872,10 +872,17 @@ fn test_manual_embedded_ascii_and_markdown() {
         .unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("VCOPY(1)"));
-    assert!(stdout.contains("QUICK START & SIMPLE EXAMPLES"));
+    assert!(
+        stdout.is_ascii(),
+        "ASCII manual output must be pure 7-bit ASCII"
+    );
+    assert!(stdout.contains("VCOPY(1) User Manual\n===================="));
+    assert!(stdout.contains("QUICK START & SIMPLE EXAMPLES\n-----------------------------"));
     assert!(stdout.contains("Numbered Versions in a Flat Directory"));
     assert!(stdout.contains("Zero-Obfuscation Configuration Files"));
+    assert!(!stdout.contains("```"));
+    assert!(!stdout.contains("**"));
+    assert!(!stdout.contains("$N$"));
 
     // 2. Test --manual-markdown flag
     let out_md = Command::new(env!("CARGO_BIN_EXE_vcopy"))
@@ -1469,7 +1476,24 @@ fn test_verify_and_bit_rot_detection() {
         .unwrap();
     assert!(st_verify.success());
 
-    // 2. Also check alias 'check' and flag --quick
+    // 2. Modify file1.txt (creating a snapshot with file1 displaced and file2 untouched in live mirror)
+    std::thread::sleep(std::time::Duration::from_millis(1050));
+    fs::write(ctx.src.join("file1.txt"), b"updated content 1").unwrap();
+    let st2 = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st2.success());
+
+    // Multi-snapshot verify (both full and --quick) must succeed
+    let st_verify_multi = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("verify")
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st_verify_multi.success());
+
     let st_check = Command::new(env!("CARGO_BIN_EXE_vcopy"))
         .arg("check")
         .arg("--quick")
@@ -1500,7 +1524,7 @@ fn test_verify_and_bit_rot_detection() {
     );
 
     // 4. Restore file1 and delete file2 (simulate missing file)
-    fs::write(ctx.dst.join("file1.txt"), b"initial content 1").unwrap();
+    fs::write(ctx.dst.join("file1.txt"), b"updated content 1").unwrap();
     fs::remove_file(ctx.dst.join("file2.txt")).unwrap();
 
     let out_missing = Command::new(env!("CARGO_BIN_EXE_vcopy"))
@@ -1518,6 +1542,69 @@ fn test_verify_and_bit_rot_detection() {
         "Output should report missing file: {}",
         stdout_missing
     );
+
+    // 5. Also verify multi-snapshot flat mode repository
+    let flat_dst = ctx.dir.join("flat_dst");
+    fs::create_dir_all(&flat_dst).unwrap();
+    let st_flat1 = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--flat")
+        .arg(&ctx.src)
+        .arg(&flat_dst)
+        .status()
+        .unwrap();
+    assert!(st_flat1.success());
+
+    std::thread::sleep(std::time::Duration::from_millis(1050));
+    fs::write(ctx.src.join("file1.txt"), b"flat v2 content 1").unwrap();
+    let st_flat2 = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--flat")
+        .arg(&ctx.src)
+        .arg(&flat_dst)
+        .status()
+        .unwrap();
+    assert!(st_flat2.success());
+
+    let st_verify_flat = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("verify")
+        .arg("-v")
+        .arg(&flat_dst)
+        .status()
+        .unwrap();
+    assert!(st_verify_flat.success());
+
+    // Corrupt flat archive file (file1.v1.txt) and add an untracked file
+    fs::write(flat_dst.join("file1.v1.txt"), b"corrupted flat v1").unwrap();
+    fs::write(flat_dst.join("stray_untracked.bin"), b"orphan").unwrap();
+
+    let out_flat_corrupt = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("verify")
+        .arg("-v")
+        .arg(&flat_dst)
+        .output()
+        .unwrap();
+    assert!(!out_flat_corrupt.status.success());
+    let flat_stdout = String::from_utf8_lossy(&out_flat_corrupt.stdout);
+    assert!(flat_stdout.contains("[CORRUPTED]"));
+    assert!(flat_stdout.contains("[UNTRACKED] stray_untracked.bin"));
+
+    // Verify with non-matching -t timestamp or empty directory fails
+    let out_bad_time = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("verify")
+        .arg("-t")
+        .arg("1999-01-01")
+        .arg(&flat_dst)
+        .output()
+        .unwrap();
+    assert!(!out_bad_time.status.success());
+
+    let empty_dir = ctx.dir.join("empty_not_vcopy");
+    fs::create_dir_all(&empty_dir).unwrap();
+    let out_empty = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("verify")
+        .arg(&empty_dir)
+        .output()
+        .unwrap();
+    assert!(!out_empty.status.success());
 }
 
 #[test]
@@ -1609,4 +1696,153 @@ fn test_flat_date_naming_and_orphan_recovery() {
         fs::read(restore_out.join("notes.txt")).unwrap(),
         b"notes version 1"
     );
+}
+
+#[test]
+fn test_self_healing_missing_destination_file() {
+    let ctx = TestContext::new("self_healing");
+    ctx.write_src_file("vital.txt", b"vital data");
+
+    // 1. Hierarchical mode self-healing
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap()
+        .success());
+    assert!(ctx.dst.join("vital.txt").is_file());
+
+    // Accidentally delete vital.txt from destination mirror while source is unchanged
+    fs::remove_file(ctx.dst.join("vital.txt")).unwrap();
+    assert!(!ctx.dst.join("vital.txt").exists());
+
+    // Re-running vcopy must detect the missing destination file and self-heal (restored_missing)
+    let out_heal = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("-v")
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .output()
+        .unwrap();
+    assert!(out_heal.status.success());
+    let stdout_heal = String::from_utf8_lossy(&out_heal.stdout);
+    assert!(
+        stdout_heal.contains("+ vital.txt"),
+        "Expected self-healing '+ vital.txt' log, got: {}",
+        stdout_heal
+    );
+    let baseline_raw = fs::read_to_string(ctx.dst.join(".version-history/baseline.json")).unwrap();
+    assert!(
+        baseline_raw.contains("restored_missing"),
+        "Expected baseline.json to record restored_missing action"
+    );
+    assert_eq!(fs::read(ctx.dst.join("vital.txt")).unwrap(), b"vital data");
+
+    // 2. Flat mode self-healing
+    let flat_dst = ctx.dir.join("flat_dst");
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--flat")
+        .arg(&ctx.src)
+        .arg(&flat_dst)
+        .status()
+        .unwrap()
+        .success());
+    fs::remove_file(flat_dst.join("vital.txt")).unwrap();
+
+    let out_flat_heal = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--flat")
+        .arg("-v")
+        .arg(&ctx.src)
+        .arg(&flat_dst)
+        .output()
+        .unwrap();
+    assert!(out_flat_heal.status.success());
+    assert_eq!(fs::read(flat_dst.join("vital.txt")).unwrap(), b"vital data");
+}
+
+#[test]
+fn test_nested_vcopyignore_and_config_subcommands() {
+    let ctx = TestContext::new("nested_ignore_cfg");
+
+    fs::create_dir_all(ctx.src.join("sub/deep")).unwrap();
+    fs::create_dir_all(ctx.src.join("sub/cache")).unwrap();
+    fs::write(
+        ctx.src.join("sub/.vcopyignore"),
+        b"*.tmp\n/anchored.txt\ncache/\n",
+    )
+    .unwrap();
+    fs::write(ctx.src.join("sub/keep.txt"), b"keep sub").unwrap();
+    fs::write(ctx.src.join("sub/skip.tmp"), b"skip 1").unwrap();
+    fs::write(ctx.src.join("sub/deep/skip2.tmp"), b"skip 2").unwrap();
+    fs::write(ctx.src.join("sub/anchored.txt"), b"skip anchored").unwrap();
+    fs::write(ctx.src.join("sub/deep/anchored.txt"), b"keep deep anchored").unwrap();
+    fs::write(ctx.src.join("sub/cache/item.bin"), b"skip cache").unwrap();
+
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap()
+        .success());
+
+    assert!(ctx.dst.join("sub/keep.txt").is_file());
+    assert!(ctx.dst.join("sub/deep/anchored.txt").is_file());
+    assert!(!ctx.dst.join("sub/skip.tmp").exists());
+    assert!(!ctx.dst.join("sub/deep/skip2.tmp").exists());
+    assert!(!ctx.dst.join("sub/anchored.txt").exists());
+    assert!(!ctx.dst.join("sub/cache").exists());
+
+    // Test config-driven `verify --quick`
+    let verify_cfg = ctx.dir.join("verify.conf");
+    fs::write(
+        &verify_cfg,
+        format!("verify --quick --dest \"{}\"\n", ctx.dst.display()),
+    )
+    .unwrap();
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("-c")
+        .arg(&verify_cfg)
+        .status()
+        .unwrap()
+        .success());
+
+    // Test config-driven `restore` with `include` filter
+    let restore_out = ctx.dir.join("cfg_restore_out");
+    let restore_cfg = ctx.dir.join("restore.toml");
+    fs::write(
+        &restore_cfg,
+        format!(
+            "command = \"restore\"\ndest = '{}'\ntarget-out = '{}'\ninclude = \"keep.txt\"\n",
+            ctx.dst.display(),
+            restore_out.display()
+        ),
+    )
+    .unwrap();
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("-c")
+        .arg(&restore_cfg)
+        .status()
+        .unwrap()
+        .success());
+    assert!(restore_out.join("sub/keep.txt").is_file());
+    assert!(!restore_out.join("sub/deep/anchored.txt").exists());
+}
+
+#[test]
+fn test_stale_pid_lock_recovery() {
+    let ctx = TestContext::new("stale_pid_lock");
+    ctx.write_src_file("doc.txt", b"hello");
+
+    let hist_dir = ctx.dst.join(".version-history");
+    fs::create_dir_all(&hist_dir).unwrap();
+    // Write a stale PID that cannot exist (999999999)
+    fs::write(hist_dir.join(".pid_lock"), b"999999999\n").unwrap();
+
+    // vcopy should clean up any stale .pid_lock if encountered and complete backup
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap()
+        .success());
+    assert!(ctx.dst.join("doc.txt").is_file());
 }
