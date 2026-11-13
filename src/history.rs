@@ -427,7 +427,7 @@ pub fn save_flat_manifest(dest: &Path, manifest: &crate::models::FlatManifest) -
         return Err(e);
     }
 
-    // Also write .version-history.manifest.jsonl for the append-only snapshot ledger
+    // Also write .version-history.manifest.jsonl snapshot ledger
     let jsonl_path = dest.join(".version-history.manifest.jsonl");
     let tmp_jsonl = dest.join(format!(
         ".version-history.manifest.jsonl.tmp.{}",

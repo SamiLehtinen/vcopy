@@ -93,7 +93,7 @@ vcopy --flat /home/user/docs /home/user/photos /mnt/usb/backup
 ├── notes_from_photos.v0.txt       # Historical version of notes_from_photos
 ├── .version-history.lock          # Advisory concurrency lock
 ├── .version-history.baseline.json # Live state manifest & checksums
-└── .version-history.manifest.jsonl# Append-only snapshot ledger
+└── .version-history.manifest.jsonl# Snapshot history ledger
 ```
 
 ---

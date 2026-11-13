@@ -81,7 +81,7 @@ vcopy --flat /home/user/docs /home/user/photos /mnt/usb/backup
 ├── notes_from_photos.v0.txt       # Historical version of notes_from_photos
 ├── .version-history.lock          # Advisory concurrency lock
 ├── .version-history.baseline.json # Live state manifest & checksums
-└── .version-history.manifest.jsonl# Append-only snapshot ledger
+└── .version-history.manifest.jsonl# Snapshot history ledger
 ```
 
 You can also use `--flat-date` to name displaced flat revisions with full timestamps (e.g. `report.2026-11-09_083000.pdf`) instead of monotonic version numbers.
@@ -431,11 +431,12 @@ Ideal when you need all files in a single flat folder (e.g. flat USB drives, pho
 ├── notes_from_personal.v0.txt          # Historical version of notes_from_personal
 ├── .version-history.lock               # Advisory lock
 ├── .version-history.baseline.json      # Latest live state manifest
-└── .version-history.manifest.jsonl     # Append-only snapshot ledger
+└── .version-history.manifest.jsonl     # Snapshot history ledger
 ```
 
 - **Monotonic Version Numbering:** Numbered versions (`.v0`, `.v1`, ...) increment monotonically and are never renamed when intermediate snapshots are pruned. This avoids massive metadata renames and directory table fragmentation on FAT32 and exFAT.
 - **Timestamped Revisions:** Use `--flat-date` to name displaced flat revisions with their snapshot timestamp (e.g. `report.2026-11-09_083000.pdf`) instead of version numbers.
+- **Pruning Obsolete Versions:** When snapshots expire under retention policies (GFS or count-based), displaced versions and deleted files no longer required by any surviving snapshot are physically purged from disk, and the `.version-history.manifest.jsonl` ledger is compacted.
 
 ---
 

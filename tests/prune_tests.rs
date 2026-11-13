@@ -297,6 +297,16 @@ fn test_flat_pruning_and_consolidation() {
         serde_json::from_str(&fs::read_to_string(&flat_manifest_path).unwrap()).unwrap();
     assert_eq!(flat_json_after["snapshots"].as_array().unwrap().len(), 1);
 
+    // doc.v1.txt was in S1 (pruned) and was removed; doc.v2.txt is in S2 (kept) and must remain
+    assert!(
+        !ctx.dst.join("doc.v1.txt").exists(),
+        "Obsolete version doc.v1.txt should have been pruned from disk"
+    );
+    assert!(
+        ctx.dst.join("doc.v2.txt").is_file(),
+        "Active version doc.v2.txt should remain on disk"
+    );
+
     // Surviving snapshot must restore successfully
     let restore_out = ctx.dir.join("restored_surviving");
     let surviving_snap_name = flat_json_after["snapshots"][0]["snapshot_name"]

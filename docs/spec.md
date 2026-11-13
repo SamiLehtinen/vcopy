@@ -73,7 +73,7 @@ All files are stored flat inside `<destination>/` without subfolders. Live files
 ├── notes_from_personal.v0.txt          # Displaced revision of notes_from_personal.txt
 ├── .version-history.lock               # Advisory concurrency lock
 ├── .version-history.baseline.json      # Latest live state manifest
-└── .version-history.manifest.jsonl     # Append-only ledger of all snapshot manifests
+└── .version-history.manifest.jsonl     # Snapshot history ledger
 ```
 
 #### Monotonic Version Naming Convention & GFS Retention
