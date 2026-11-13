@@ -267,7 +267,8 @@ pub fn is_system_or_root_directory(path: &Path) -> bool {
         return true;
     }
     let p_str = path.to_string_lossy();
-    let trimmed = p_str.trim_end_matches(['/', '\\']);
+    let stripped = p_str.strip_prefix(r"\\?\").unwrap_or(&p_str);
+    let trimmed = stripped.trim_end_matches(['/', '\\']);
 
     let blocked_unix = [
         "/etc",
