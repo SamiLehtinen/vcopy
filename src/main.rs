@@ -28,7 +28,7 @@ use verify::{run_verify, VerifyOptions};
 #[command(
     name = "vcopy",
     author = "Sami Lehtinen",
-    version = "0.2.0",
+    version = "0.3.0",
     about = "Browseable zero-link backup tool with history",
     long_about = "vcopy creates directly browseable, uncompressed filesystem mirrors on external drives and non-snapshotting filesystems (exFAT, FAT32, NTFS, ext4, APFS) while preserving a full historical change record in .version-history/.",
     subcommand_precedence_over_arg = true

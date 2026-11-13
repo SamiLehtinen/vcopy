@@ -458,7 +458,7 @@ Ideal when you need all files in a single flat folder (e.g. flat USB drives, pho
 
 ## Installation & Pre-Built Binaries
 
-Pre-compiled standalone static binaries for release `v0.2.0` are available on the [GitHub Releases](https://github.com/samilehtinen/vcopy/releases) page:
+Pre-compiled standalone static binaries for release `v0.3.0` are available on the [GitHub Releases](https://github.com/samilehtinen/vcopy/releases) page:
 
 | Platform | Architecture | Target Triple | Binary Name |
 | :--- | :--- | :--- | :--- |
