@@ -197,3 +197,39 @@ fn acquire_pid_lock(hist_dir: &Path) -> io::Result<BackupLock> {
         "Destination is locked by another running process",
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pid_lock_stale_recovery_and_active_contention() {
+        let dir = std::env::temp_dir().join(format!("vcopy_pid_lock_test_{}", process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        // 1. Write stale PID (999_999_999) and verify acquire_pid_lock recovers it
+        #[cfg(target_os = "linux")]
+        {
+            fs::write(dir.join(".pid_lock"), "999999999\n").unwrap();
+            let lock = acquire_pid_lock(&dir).expect("should recover stale pid lock");
+            // 2. While `lock` is held by current process::id(), a second acquire_pid_lock must fail with WouldBlock
+            let second = acquire_pid_lock(&dir);
+            assert!(second.is_err());
+            assert_eq!(second.err().unwrap().kind(), io::ErrorKind::WouldBlock);
+            drop(lock);
+            assert!(!dir.join(".pid_lock").exists());
+
+            // 3. Same for flat pid lock
+            fs::write(dir.join(".version-history.pid_lock"), "999999999\n").unwrap();
+            let flat_lock =
+                acquire_flat_pid_lock(&dir).expect("should recover stale flat pid lock");
+            let flat_second = acquire_flat_pid_lock(&dir);
+            assert!(flat_second.is_err());
+            drop(flat_lock);
+            assert!(!dir.join(".version-history.pid_lock").exists());
+        }
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+}

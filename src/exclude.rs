@@ -88,9 +88,14 @@ impl ExcludeFilter {
             if prefix.is_empty() {
                 self.add_pattern(trimmed);
             } else {
-                let clean_p = trimmed.trim_start_matches('/');
+                let anchored = trimmed.starts_with('/') || trimmed.starts_with('\\');
+                let clean_p = trimmed.trim_start_matches(['/', '\\']);
+                if clean_p.is_empty() {
+                    continue;
+                }
                 self.add_pattern(&format!("{}/{}", prefix, clean_p));
-                if !clean_p.contains('/') && !clean_p.starts_with('*') {
+                let no_trail = clean_p.trim_end_matches(['/', '\\']);
+                if !anchored && !no_trail.contains('/') && !no_trail.contains('\\') {
                     self.add_pattern(&format!("{}/**/{}", prefix, clean_p));
                 }
             }
@@ -200,5 +205,30 @@ mod tests {
         assert_eq!(filter.raw_patterns(), &["valid.txt"]);
         assert!(filter.is_excluded("valid.txt", false));
         assert!(!filter.is_excluded("other.txt", false));
+    }
+
+    #[test]
+    fn test_exclude_nested_prefix() {
+        let dir = std::env::temp_dir().join(format!("vcopy_exclude_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let ignore_file = dir.join(".vcopyignore");
+        std::fs::write(&ignore_file, "*.tmp\n/anchored.txt\ncache/\n").unwrap();
+
+        let mut filter = ExcludeFilter::new();
+        filter
+            .add_patterns_from_file_with_prefix(&ignore_file, "sub")
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(filter.is_excluded("sub/a.tmp", false));
+        assert!(filter.is_excluded("sub/deep/b.tmp", false));
+        assert!(!filter.is_excluded("other/a.tmp", false));
+
+        assert!(filter.is_excluded("sub/anchored.txt", false));
+        assert!(!filter.is_excluded("sub/deep/anchored.txt", false));
+
+        assert!(filter.is_excluded("sub/cache", true));
+        assert!(filter.is_excluded("sub/deep/cache", true));
+        assert!(filter.is_excluded("sub/deep/cache/item.bin", false));
     }
 }

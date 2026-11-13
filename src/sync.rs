@@ -898,9 +898,7 @@ fn run_create_flat(
                 }
             }
             Some(base) => {
-                let is_content_modified = base.size != df.size
-                    || base.mtime_ns != df.mtime_ns
-                    || (base.crc32.is_some() && df.crc32.is_some() && base.crc32 != df.crc32);
+                let is_content_modified = is_file_content_modified(base, df);
                 let is_perms_modified = opts.preserve_permissions
                     && (base.mode != df.mode || base.readonly != df.readonly);
 
@@ -1196,6 +1194,27 @@ struct EvalContext<'a> {
     summary: &'a mut RunSummary,
 }
 
+fn is_file_content_modified(base: &FileState, df: &DiscoveredFile) -> bool {
+    if base.size != df.size {
+        return true;
+    }
+    if base.crc32.is_some() && df.crc32.is_some() && base.crc32 != df.crc32 {
+        return true;
+    }
+    if base.mtime_ns != df.mtime_ns {
+        // Allow up to 2 seconds (2_000_000_000 ns) tolerance for FAT32/exFAT timestamp rounding
+        // when sizes and CRC32 checksums are identical.
+        if base.crc32.is_some()
+            && base.crc32 == df.crc32
+            && base.mtime_ns.abs_diff(df.mtime_ns) <= 2_000_000_000
+        {
+            return false;
+        }
+        return true;
+    }
+    false
+}
+
 fn eval_file(df: &DiscoveredFile, ctx: &mut EvalContext) -> io::Result<()> {
     let rel_str = &df.rel_str;
     let dest_file = ctx.dest.join(rel_str);
@@ -1223,9 +1242,7 @@ fn eval_file(df: &DiscoveredFile, ctx: &mut EvalContext) -> io::Result<()> {
             }
         }
         Some(base) => {
-            let is_content_modified = base.size != df.size
-                || base.mtime_ns != df.mtime_ns
-                || (base.crc32.is_some() && df.crc32.is_some() && base.crc32 != df.crc32);
+            let is_content_modified = is_file_content_modified(base, df);
             let is_perms_modified = ctx.opts.preserve_permissions
                 && (base.mode != df.mode || base.readonly != df.readonly);
 
