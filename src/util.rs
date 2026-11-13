@@ -271,12 +271,14 @@ pub fn is_system_or_root_directory(path: &Path) -> bool {
 
     let blocked_unix = [
         "/etc",
+        "/private/etc",
         "/usr",
         "/bin",
         "/sbin",
         "/lib",
         "/lib64",
         "/var",
+        "/private/var",
         "/boot",
         "/dev",
         "/sys",
@@ -293,7 +295,7 @@ pub fn is_system_or_root_directory(path: &Path) -> bool {
     }
 
     let lower = trimmed.to_lowercase();
-    if lower == "c:"
+    lower == "c:"
         || lower == "c:\\windows"
         || lower == "c:/windows"
         || lower.starts_with("c:\\windows\\system32")
@@ -304,11 +306,6 @@ pub fn is_system_or_root_directory(path: &Path) -> bool {
         || lower == "c:/program files (x86)"
         || lower == "c:\\recovery"
         || lower == "c:/recovery"
-    {
-        return true;
-    }
-
-    false
 }
 
 pub fn is_user_home_directory(path: &Path) -> bool {

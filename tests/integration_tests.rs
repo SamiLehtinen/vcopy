@@ -629,8 +629,10 @@ fn test_config_file_toml_and_json() {
     let dst_toml = ctx.dir.join("dst_toml");
     let toml_config = ctx.dir.join("vcopy.toml");
     let mut f = File::create(&toml_config).unwrap();
-    writeln!(f, "sources = [\"{}\"]", ctx.src.display()).unwrap();
-    writeln!(f, "dest = \"{}\"", dst_toml.display()).unwrap();
+    let src_escaped = ctx.src.display().to_string().replace('\\', "\\\\");
+    let dst_toml_escaped = dst_toml.display().to_string().replace('\\', "\\\\");
+    writeln!(f, "sources = [\"{}\"]", src_escaped).unwrap();
+    writeln!(f, "dest = \"{}\"", dst_toml_escaped).unwrap();
     writeln!(f, "flatten = false").unwrap();
     writeln!(f, "verbose = true").unwrap();
     writeln!(f, "keep_hourly = 10").unwrap();
@@ -651,6 +653,7 @@ fn test_config_file_toml_and_json() {
     let dst_json = ctx.dir.join("dst_json");
     let json_config = ctx.dir.join("vcopy.json");
     let mut f2 = File::create(&json_config).unwrap();
+    let dst_json_escaped = dst_json.display().to_string().replace('\\', "\\\\");
     writeln!(
         f2,
         r#"{{
@@ -659,8 +662,7 @@ fn test_config_file_toml_and_json() {
             "flatten": true,
             "verbose": true
         }}"#,
-        ctx.src.display(),
-        dst_json.display()
+        src_escaped, dst_json_escaped
     )
     .unwrap();
 
@@ -685,8 +687,18 @@ fn test_config_cli_overrides() {
     let dst_override = ctx.dir.join("dst_override");
     let toml_config = ctx.dir.join("vcopy.toml");
     let mut f = File::create(&toml_config).unwrap();
-    writeln!(f, "sources = [\"{}\"]", ctx.src.display()).unwrap();
-    writeln!(f, "dest = \"{}\"", dst_cfg.display()).unwrap();
+    writeln!(
+        f,
+        "sources = [\"{}\"]",
+        ctx.src.display().to_string().replace('\\', "\\\\")
+    )
+    .unwrap();
+    writeln!(
+        f,
+        "dest = \"{}\"",
+        dst_cfg.display().to_string().replace('\\', "\\\\")
+    )
+    .unwrap();
     writeln!(f, "dry_run = false").unwrap();
 
     // 1. CLI --dry-run overrides config dry_run = false
@@ -768,11 +780,16 @@ fn test_multiple_paths_from_and_glob_masks() {
     writeln!(
         f_cfg,
         "paths_from = [\"{}\", \"{}\"]",
-        mask_pattern,
-        list_extra.display()
+        mask_pattern.replace('\\', "\\\\"),
+        list_extra.display().to_string().replace('\\', "\\\\")
     )
     .unwrap();
-    writeln!(f_cfg, "dest = \"{}\"", dst3.display()).unwrap();
+    writeln!(
+        f_cfg,
+        "dest = \"{}\"",
+        dst3.display().to_string().replace('\\', "\\\\")
+    )
+    .unwrap();
     writeln!(f_cfg, "flatten = true").unwrap();
 
     let st3 = Command::new(env!("CARGO_BIN_EXE_vcopy"))
@@ -1289,10 +1306,14 @@ fn test_destination_safety_guards() {
     let ctx = TestContext::new("dest_guards");
     ctx.write_src_file("sample.txt", b"sample content");
 
-    // 1. Refuse system directory (/etc or /usr)
+    // 1. Refuse system directory (/etc on Unix, C:\Windows on Windows)
+    #[cfg(unix)]
+    let sys_dir = "/etc";
+    #[cfg(windows)]
+    let sys_dir = "C:\\Windows";
     let output_etc = Command::new(env!("CARGO_BIN_EXE_vcopy"))
         .arg(&ctx.src)
-        .arg("/etc")
+        .arg(sys_dir)
         .output()
         .unwrap();
     assert!(!output_etc.status.success());

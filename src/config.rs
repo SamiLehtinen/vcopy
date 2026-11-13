@@ -324,7 +324,14 @@ fn tokenize_config(content: &str) -> Vec<String> {
                     in_quote = None;
                 } else if c == '\\' {
                     if let Some(next) = chars.next() {
-                        cur.push(next);
+                        if next == q || next == '\\' {
+                            cur.push(next);
+                        } else {
+                            cur.push('\\');
+                            cur.push(next);
+                        }
+                    } else {
+                        cur.push('\\');
                     }
                 } else {
                     cur.push(c);
@@ -338,8 +345,16 @@ fn tokenize_config(content: &str) -> Vec<String> {
                     tokens.push(cur);
                     cur = String::new();
                 }
-            } else if c == '=' || c == ':' {
-                // If '=' or ':' is encountered unquoted
+            } else if c == '='
+                || (c == ':'
+                    && !(cur.len() == 1
+                        && cur
+                            .chars()
+                            .next()
+                            .is_some_and(|ch| ch.is_ascii_alphabetic())
+                        && matches!(chars.peek(), Some('\\') | Some('/'))))
+            {
+                // If '=' or ':' is encountered unquoted (excluding Windows drive prefixes like C:\)
                 if !cur.is_empty() {
                     tokens.push(cur);
                     cur = String::new();
@@ -757,5 +772,29 @@ pub fn load_config(path: &Path) -> Result<ConfigFile, String> {
                 ))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_windows_paths_in_cli_and_keyval_config() {
+        let conf = r#"
+--sources C:\Users\runner\src
+--dest "C:\Users\runner\dst"
+sources = D:\Data\Backup
+"#;
+        let cfg = parse_cli_or_keyval_config(conf).unwrap();
+        assert_eq!(cfg.dest.as_deref(), Some(Path::new(r"C:\Users\runner\dst")));
+        let sources = cfg.get_sources();
+        assert_eq!(
+            sources,
+            vec![
+                PathBuf::from(r"C:\Users\runner\src"),
+                PathBuf::from(r"D:\Data\Backup"),
+            ]
+        );
     }
 }
