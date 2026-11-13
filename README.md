@@ -62,7 +62,7 @@ find /home/user/code -name "*.rs" | vcopy -f - -d /mnt/usb/backup
 ### 3. Numbered Versions in a Flat Directory (`--flat` or `--flat-date`)
 When you want all files in a single flat folder without nested subfolders (ideal for flat USB thumb drives, camera ingest dropboxes, or single-folder cloud storage), use `--flat` (or `--flatten`):
 
-Every file is placed directly in the destination root. Historical revisions receive monotonic numbered version suffixes (`.v0`, `.v1`, `.v2`, ...):
+Every file is placed directly in the destination root. Historical revisions receive 1-based monotonic numbered version suffixes (`.v1`, `.v2`, `.v3`, ...):
 
 ```bash
 vcopy --flat /home/user/docs /home/user/photos /mnt/usb/backup
@@ -72,13 +72,13 @@ vcopy --flat /home/user/docs /home/user/photos /mnt/usb/backup
 ```text
 /mnt/usb/backup/
 ├── report.pdf                     # Current live version (latest)
-├── report.v0.pdf                  # Oldest historical version (v0)
-├── report.v1.pdf                  # Second historical version (v1)
+├── report.v1.pdf                  # First archived historical version (v1)
+├── report.v2.pdf                  # Second archived historical version (v2)
 ├── photo.jpg                      # Current live photo
-├── photo.v0.jpg                   # Prior version of photo
-├── notes_from_docs.txt            # Stem collision disambiguated by source
-├── notes_from_photos.txt          # Stem collision disambiguated by source
-├── notes_from_photos.v0.txt       # Historical version of notes_from_photos
+├── photo.v1.jpg                   # Prior version of photo
+├── notes.txt                      # First file with basename notes.txt
+├── notes_2.txt                    # Disambiguated basename collision
+├── notes_2.v1.txt                 # Historical version of notes_2.txt
 ├── .version-history.lock          # Advisory concurrency lock
 ├── .version-history.baseline.json # Live state manifest & checksums
 └── .version-history.manifest.jsonl# Snapshot history ledger
@@ -222,12 +222,12 @@ vcopy [OPTIONS] [SOURCES... DEST]... [COMMAND]
 | `-c, --config` | `<FILE>` | None | Path to configuration file. Accepts direct CLI arguments format (exact same flags/args as command line), key-value, TOML, or JSON. |
 | `-e, --exclude` | `<PATTERN>` | None | Exclude files or directories matching glob pattern (e.g. `*.tmp`, `target/`). Can be specified multiple times. |
 | `--exclude-from` | `<FILE>` | None | Read exclude patterns from a file (one per line, e.g. `.gitignore`). Can be specified multiple times. |
-| `--flat` | Flag | `false` | Single-directory flat mode: stores all live and historical files in root using `.v0`, `.v1` version numbers. *(Alias: `--flatten`)* |
+| `--flat` | Flag | `false` | Single-directory flat mode: stores all live and historical files in root using 1-based `.v1`, `.v2` version numbers. *(Alias: `--flatten`)* |
 | `--flat-date` | Flag | `false` | Flat mode using timestamped versions (`<stem>.<TIMESTAMP>.<ext>`) instead of monotonic version numbers. |
 | `-i, --include` | `<PATTERN>` | None | Partial restore filter: restore only matching files or subtrees. *(Alias: `--filter`)* |
-| `--quick` | Flag | `false` | Fast verification mode: verify file existence, sizes, and mtime without recomputing CRC32. |
+| `--quick` | Flag | `false` | Fast verification mode: verify file existence, sizes, and mtime (with 2-second FAT/exFAT tolerance) without recomputing CRC32. |
 | `-p, --perms` | Flag | `false` | Record POSIX file modes (Unix) and readonly attributes (Windows) in manifests and restore them. *(Aliases: `--preserve-permissions`, `--permissions`)* |
-| `-t, --time` | `<TIMESTAMP>` | `latest` | Point-in-time timestamp (`YYYY-MM-DD_HHMMSS` or prefix) or `latest` for `restore` and `verify`. *(Aliases: `--target-time`, `--snapshot`)* |
+| `-t, --time` | `<TIMESTAMP>` | `latest` | Point-in-time timestamp (`YYYY-MM-DD_HHMMSS` or prefix; 1-second resolution) or `latest` for `restore` and `verify`. *(Aliases: `--target-time`, `--snapshot`)* |
 | `-F, --force` | Flag | `false` | Force execution, bypassing safety circuit breakers (100% loss, foreign directory, missing source). |
 | `--allow-existing` | Flag | `false` | Allow destination or restore output directory to contain pre-existing foreign files without failing. |
 | `--allow-empty-source` | Flag | `false` | Allow empty source without tripping the 100% deletion safety circuit breaker. |
@@ -424,18 +424,18 @@ Ideal when you need all files in a single flat folder (e.g. flat USB drives, pho
 ```text
 /mnt/usb/backup/
 ├── report.pdf                          # Current live version
-├── report.v0.pdf                       # Oldest historical version
-├── report.v1.pdf                       # Second historical version
-├── notes_from_work.txt                 # Disambiguated source collision
-├── notes_from_personal.txt             # Disambiguated source collision
-├── notes_from_personal.v0.txt          # Historical version of notes_from_personal
+├── report.v1.pdf                       # First archived historical version
+├── report.v2.pdf                       # Second archived historical version
+├── notes.txt                           # First file with basename notes.txt
+├── notes_2.txt                         # Disambiguated basename collision
+├── notes_2.v1.txt                      # Historical version of notes_2.txt
 ├── .version-history.lock               # Advisory lock
 ├── .version-history.baseline.json      # Latest live state manifest
 └── .version-history.manifest.jsonl     # Snapshot history ledger
 ```
 
-- **Monotonic Version Numbering:** Numbered versions (`.v0`, `.v1`, ...) increment monotonically and are never renamed when intermediate snapshots are pruned. This avoids massive metadata renames and directory table fragmentation on FAT32 and exFAT.
-- **Timestamped Revisions:** Use `--flat-date` to name displaced flat revisions with their snapshot timestamp (e.g. `report.2026-11-09_083000.pdf`) instead of version numbers.
+- **Monotonic 1-Based Version Numbering:** Numbered versions (`.v1`, `.v2`, ...) increment monotonically starting from 1 and are never renamed when intermediate snapshots are pruned. This avoids massive metadata renames and directory table fragmentation on FAT32 and exFAT.
+- **Timestamped Revisions:** Use `--flat-date` to name displaced flat revisions with their 1-second resolution snapshot timestamp (e.g. `report.2026-11-09_083000.pdf`) instead of version numbers. (Note: snapshots use 1-second resolution; sub-second snapshots are not supported.)
 - **Pruning Obsolete Versions:** When snapshots expire under retention policies (GFS or count-based), displaced versions and deleted files no longer required by any surviving snapshot are physically purged from disk, and the `.version-history.manifest.jsonl` ledger is compacted.
 
 ---
@@ -464,8 +464,8 @@ Pre-compiled standalone static binaries for release `v0.2.0` are available on th
 | :--- | :--- | :--- | :--- |
 | **Linux (Static MUSL)** | x86_64 | `x86_64-unknown-linux-musl` | `vcopy` |
 | **Linux (Static MUSL)** | ARM64 | `aarch64-unknown-linux-musl` | `vcopy` |
-| **Windows** | x86_64 | `x86_64-pc-windows-gnullvm` | `vcopy.exe` |
-| **Windows** | ARM64 | `aarch64-pc-windows-gnullvm` | `vcopy.exe` |
+| **Windows** | x86_64 | `x86_64-pc-windows-msvc` | `vcopy.exe` |
+| **Windows** | ARM64 | `aarch64-pc-windows-msvc` | `vcopy.exe` |
 | **macOS** | Apple Silicon (arm64) | `aarch64-apple-darwin` | `vcopy` |
 | **macOS** | Intel (x86_64) | `x86_64-apple-darwin` | `vcopy` |
 

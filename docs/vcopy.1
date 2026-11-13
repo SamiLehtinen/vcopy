@@ -50,7 +50,7 @@ $ find /home/user/code -name "*.rs" | vcopy -f - -d /mnt/usb/backup
 .fi
 .RE
 .SS 3. Numbered Versions in a Flat Directory (--flatten)
-Store all files in a single flat destination directory without nested folders. Historical revisions receive monotonic numbered version suffixes (\fI.v0\fR, \fI.v1\fR, ...):
+Store all files in a single flat destination directory without nested folders. Historical revisions receive 1-based monotonic numbered version suffixes (\fI.v1\fR, \fI.v2\fR, ...):
 .PP
 .RS 4
 .nf
@@ -64,13 +64,13 @@ Destination layout with numbered versions:
 .nf
 /mnt/usb/backup/
 |-- report.pdf                     # Current live version (latest)
-|-- report.v0.pdf                  # Oldest historical version (v0)
-|-- report.v1.pdf                  # Second historical version (v1)
+|-- report.v1.pdf                  # First archived historical version (v1)
+|-- report.v2.pdf                  # Second archived historical version (v2)
 |-- photo.jpg                      # Current live photo
-|-- photo.v0.jpg                   # Prior version of photo
-|-- notes_from_docs.txt            # Stem collision disambiguated
-|-- notes_from_photos.txt          # Stem collision disambiguated
-|-- notes_from_photos.v0.txt       # Historical version of notes
+|-- photo.v1.jpg                   # Prior version of photo
+|-- notes.txt                      # First file with basename notes.txt
+|-- notes_2.txt                    # Stem collision disambiguated (<stem>_2.<ext>)
+|-- notes_2.v1.txt                 # Historical version of notes_2.txt
 |-- .version-history.lock          # Advisory concurrency lock
 |-- .version-history.baseline.json # Live state manifest & checksums
 `-- .version-history.manifest.jsonl# Snapshot history ledger
@@ -165,7 +165,7 @@ Exclude files or directories matching glob pattern (e.g. \fI*.tmp\fR, \fItarget/
 Read exclude patterns from a file (one per line, e.g. \fI.gitignore\fR). Can be specified multiple times.
 .TP
 .BR \-\-flat ", " \-\-flatten
-Single-directory flat mode: stores all live and historical files in root using \fI.v0\fR, \fI.v1\fR version numbers.
+Single-directory flat mode: stores all live and historical files in root using 1-based \fI.v1\fR, \fI.v2\fR version numbers.
 .TP
 .BR \-\-flat-date
 Flat mode using timestamped versions (\fI<stem>.<TIMESTAMP>.<ext>\fR) instead of monotonic version numbers.
@@ -174,13 +174,13 @@ Flat mode using timestamped versions (\fI<stem>.<TIMESTAMP>.<ext>\fR) instead of
 Filter files to restore matching glob pattern or subdirectory path.
 .TP
 .BR \-\-quick
-Fast verification mode for \fBverify\fR: checks file existence, size, and mtime without recomputing CRC32.
+Fast verification mode for \fBverify\fR: checks file existence, size, and mtime (with 2-second FAT/exFAT tolerance) without recomputing CRC32.
 .TP
 .BR \-p ", " \-\-perms ", " \-\-preserve-permissions
 Record POSIX file modes (Unix) and readonly attributes (Windows) in manifests and restore them.
 .TP
 .BR \-t ", " \-\-time ", " \-\-target-time " " \fITIMESTAMP\fR
-Snapshot timestamp (\fIYYYY-MM-DD_HHMMSS\fR or prefix) or \fIlatest\fR for restore and verify.
+Snapshot timestamp (\fIYYYY-MM-DD_HHMMSS\fR or prefix; 1-second resolution) or \fIlatest\fR for restore and verify.
 .TP
 .BR \-F ", " \-\-force
 Force execution, bypassing safety circuit breakers (100% loss, foreign directory, missing source).

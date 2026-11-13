@@ -61,35 +61,34 @@ The live files mirror the source layout at `<destination>/`. Displaced historica
 
 ### 2.2 Mode 2: Single-Directory Flat Mode (`--flat`)
 
-All files are stored flat inside `<destination>/` without subfolders. Live files use their base names (with collision disambiguation where needed), and displaced versions receive monotonic version numbers (`.v0`, `.v1`, ...) or full snapshot timestamps when `--flat-date` is enabled.
+All files are stored flat inside `<destination>/` without subfolders. Live files use their base names (with collision disambiguation where needed), and displaced versions receive 1-based monotonic version numbers (`.v1`, `.v2`, ...) or full snapshot timestamps (`YYYY-MM-DD_HHMMSS`, 1-second resolution; sub-second snapshots are not supported) when `--flat-date` is enabled.
 
 ```text
 <destination>/
 ├── report.pdf                          # Current live version (report.pdf)
-├── report.v0.pdf                       # Oldest displaced revision of report.pdf
-├── report.v1.pdf                       # Second displaced revision of report.pdf
-├── notes_from_work.txt                 # Disambiguated source collision
-├── notes_from_personal.txt             # Disambiguated source collision
-├── notes_from_personal.v0.txt          # Displaced revision of notes_from_personal.txt
+├── report.v1.pdf                       # First displaced revision of report.pdf
+├── report.v2.pdf                       # Second displaced revision of report.pdf
+├── notes.txt                           # First file with basename notes.txt
+├── notes_2.txt                         # Disambiguated basename collision
+├── notes_2.v1.txt                      # Displaced revision of notes_2.txt
 ├── .version-history.lock               # Advisory concurrency lock
 ├── .version-history.baseline.json      # Latest live state manifest
 └── .version-history.manifest.jsonl     # Snapshot history ledger
 ```
 
 #### Monotonic Version Naming Convention & GFS Retention
-- Monotonic numbered versions (default):
-  - Files with extensions: `<stem>.v<N>.<ext>` (e.g., `document.v0.docx`, `document.v1.docx`).
-  - Files without extensions: `<name>.v<N>` (e.g., `Makefile.v0`, `Makefile.v1`).
-- Monotonic stability: Numbered versions increment strictly upwards and are **never renamed** when older or intermediate snapshots are pruned. Renaming version numbers on disk (e.g., shifting `.v3` to `.v2`) would cause massive metadata writes and directory table fragmentation on FAT32 and exFAT filesystems. Instead, snapshots retain immutable mappings in `.version-history.manifest.jsonl`.
+- Monotonic 1-based numbered versions (default):
+  - Files with extensions: `<stem>.v<N>.<ext>` (e.g., `document.v1.docx`, `document.v2.docx`).
+  - Files without extensions: `<name>.v<N>` (e.g., `Makefile.v1`, `Makefile.v2`).
+- Monotonic stability: Numbered versions start at `1`, increment strictly upwards, and are **never renamed** when older or intermediate snapshots are pruned. Renaming version numbers on disk (e.g., shifting `.v3` to `.v2`) would cause massive metadata writes and directory table fragmentation on FAT32 and exFAT filesystems. Instead, snapshots retain immutable mappings in `.version-history.manifest.jsonl`.
 - Timestamped revisions (`--flat-date`):
-  - When `--flat-date` is active, historical versions are named directly with their snapshot timestamp: `<stem>.<YYYY-MM-DD_HHMMSS>.<ext>` (e.g., `report.2026-11-09_083000.pdf`).
+  - When `--flat-date` is active, historical versions are named directly with their 1-second resolution snapshot timestamp: `<stem>.<YYYY-MM-DD_HHMMSS>.<ext>` (e.g., `report.2026-11-09_083000.pdf`). Sub-second snapshots are not supported.
 
 #### Collision Disambiguation Strategy
-When multiple sources contribute identical file basenames to the flat destination:
-1. First source receives `<stem>_from_<source_basename>.<ext>`.
-2. Second source receives `<stem>_from_<source_basename>.<ext>`.
-3. If source basenames are identical (e.g. two separate directories named `data`), a collision index is appended: `<stem>_collision_<N>.<ext>`.
-4. Live basenames and their historical `.v<N>` variants share the exact same disambiguated stem.
+When multiple source files or subdirectories contribute identical file basenames to the flat destination:
+1. First logical path receives `<stem>.<ext>`.
+2. Subsequent colliding paths receive a 2-based numeric disambiguation suffix: `<stem>_2.<ext>`, `<stem>_3.<ext>`, ...
+3. Live basenames and their historical `.v<N>` variants share the exact same disambiguated stem (e.g., `notes_2.v1.txt`).
 
 #### Orphan File Scan Recovery
 If `.version-history.manifest.jsonl` is damaged, missing, or out of sync:
@@ -122,12 +121,26 @@ pub struct SnapshotManifest {
 Describes the state of an individual file within a snapshot:
 ```rust
 pub struct FileState {
-    pub path: String,                 // Destination-relative file path
+    pub path: String,                 // Logical relative file path
     pub size: u64,                    // File size in bytes
     pub mtime_ns: i64,                // Nanosecond source modification timestamp
     pub crc32: Option<u32>,           // SIMD CRC32 hash (optional during fast checks)
     pub mode: Option<u32>,            // Unix file mode bits (when -p enabled)
     pub readonly: Option<bool>,       // Windows/DOS readonly attribute (when -p enabled)
+    pub stored_name: Option<String>,  // Flat mode: live filename in destination root
+    pub archive_name: Option<String>, // Flat mode: displaced archived filename (.v<N> or timestamped)
+}
+```
+
+### `FlatManifest`
+Aggregated state representation used for flat single-directory repositories (`.version-history.baseline.json` and `.version-history.manifest.jsonl`):
+```rust
+pub struct FlatManifest {
+    pub _comment: String,
+    pub version: u32,
+    pub flat_mode: bool,
+    pub baseline: SnapshotManifest,
+    pub snapshots: Vec<SnapshotManifest>,
 }
 ```
 
@@ -159,7 +172,7 @@ pub struct RunSummary {
 ```rust
 pub struct SourceMapping {
     pub source_path: String,
-    pub target_prefix: String,
+    pub destination_prefix: String,
 }
 ```
 
@@ -167,7 +180,7 @@ pub struct SourceMapping {
 
 ## 4. Core Algorithms
 
-### 4.1 Sync Engine (`src/sync.rs` & `src/flatten.rs`)
+### 4.1 Sync Engine (`src/sync.rs` & `src/history.rs`)
 
 1. **Path Validation & Lock Acquisition:** Validates source and destination paths via `validate_sync_paths` and acquires an exclusive advisory lock on `.version-history/.lock` (with PID fallback).
 2. **Exclude Filter Processing:** Constructs `ExcludeFilter` combining command-line patterns (`-e / --exclude`), files (`--exclude-from`), and auto-discovered `.vcopyignore` files in source trees. Excluded files and directories are pruned from the directory walk and active pattern rules are stored in `manifest.excludes`.

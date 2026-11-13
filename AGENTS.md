@@ -24,19 +24,23 @@ This document provides architectural context, development workflows, and core in
 ```text
 src/
 ├── main.rs          # CLI entrypoint (clap), command routing, path validation, error handling
-├── config.rs        # TOML/JSON configuration file loader and options resolver
-├── models.rs        # Core data structures (SnapshotManifest, FileState, FileChange, RunSummary)
-├── sync.rs          # Hierarchical sync engine, baseline ingestion, deletion-first execution
-├── flatten.rs       # Single-directory flat sync engine, stem collision disambiguation,
-│                    # monotonic versioning (.v0, .v1), manifest.jsonl, orphan scan recovery
+├── config.rs        # CLI/TOML/JSON configuration file loader and options resolver
+├── models.rs        # Core data structures (SnapshotManifest, FlatManifest, FileState, FileChange, RunSummary)
+├── sync.rs          # Hierarchical & flat sync engine, baseline ingestion, deletion-first execution,
+│                    # stem collision disambiguation, monotonic (.v<N>) & timestamped versioning
+├── history.rs       # Manifest reading/writing, JSONL ledger handling, orphan scan recovery
 ├── restore.rs       # Point-in-time restore engine (hierarchical & flat modes)
 ├── prune.rs         # Snapshot retention pruning (GFS & count-based) with reverse-delta consolidation
-└── lock.rs          # Advisory concurrency lock with PID-file fallback
+├── verify.rs        # Repository integrity & bit-rot verification engine (hierarchical & flat modes)
+├── exclude.rs       # Glob pattern exclusion & .vcopyignore directory filter engine
+├── lock.rs          # Advisory concurrency lock with PID-file fallback
+├── util.rs          # Atomic copy, SIMD CRC32, nanosecond timestamps, safety guards, path validation
+└── manual.rs        # Embedded ASCII & Markdown user manuals
 
 tests/
 ├── common/
 │   └── mod.rs       # Test fixtures, temp dir helpers, environment setup
-├── integration_tests.rs  # End-to-end sync, collision, flatten, and safety tests
+├── integration_tests.rs  # End-to-end sync, collision, flatten, verify, exclude, and safety tests
 ├── prune_tests.rs        # Retention policy and reverse-delta consolidation tests
 └── restore_tests.rs      # Point-in-time and latest restore tests
 ```
