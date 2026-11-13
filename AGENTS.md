@@ -81,7 +81,7 @@ All multi-platform releases are automated through GitHub Actions ([`.github/work
 When a release tag (`v*.*.*`) is pushed:
 * **Linux (MUSL x86_64 & ARM64):** Built inside `ubuntu-latest` using [`cross`](https://github.com/cross-rs/cross) (`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`).
 * **Windows (x86_64 & ARM64):** Built natively on `windows-latest` (`x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc`).
-* **macOS (Intel & Apple Silicon):** Built natively on `macos-13` (`x86_64-apple-darwin`) and `macos-latest` (`aarch64-apple-darwin`).
+* **macOS (Intel & Apple Silicon):** Built on `macos-latest` (`x86_64-apple-darwin` and `aarch64-apple-darwin`).
 * Packages `.tar.gz` and `.zip` distribution bundles alongside `.sha256` checksums automatically published to GitHub Releases.
 
 Local cross-compilation can also be performed via `cross`:
