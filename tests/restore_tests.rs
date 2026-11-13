@@ -437,3 +437,152 @@ fn test_partial_and_single_path_restore() {
     assert!(!out_flat.join("notes.txt").exists());
     assert!(!out_flat.join("docs/guide.md").exists());
 }
+
+#[test]
+fn test_restore_timestamp_prefix_and_safety_guards() {
+    let ctx = TestContext::new("restore_prefix_guards");
+    ctx.write_src_file("item.txt", b"v1");
+
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap()
+        .success());
+
+    thread::sleep(Duration::from_millis(1050));
+    ctx.write_src_file("item.txt", b"v2");
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap()
+        .success());
+
+    let hist_dir = ctx.dst.join(".version-history");
+    // Rename the historical snapshot to a known date so prefix matching is deterministic
+    let snaps: Vec<_> = fs::read_dir(&hist_dir)
+        .unwrap()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.len() == 17 && n.contains('_'))
+        .collect();
+    assert_eq!(snaps.len(), 1);
+    fs::rename(hist_dir.join(&snaps[0]), hist_dir.join("2025-03-15_143000")).unwrap();
+
+    // 1. Prefix match restore ("2025-03-15" matches "2025-03-15_143000")
+    let out_prefix = ctx.dir.join("out_prefix");
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("restore")
+        .arg("-t")
+        .arg("2025-03-15")
+        .arg(&ctx.dst)
+        .arg(&out_prefix)
+        .status()
+        .unwrap()
+        .success());
+    assert_eq!(
+        fs::read_to_string(out_prefix.join("item.txt")).unwrap(),
+        "v1"
+    );
+
+    // 2. Non-existent early timestamp ("1999-01-01") must fail
+    let out_fail = ctx.dir.join("out_fail");
+    let out_early = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("restore")
+        .arg("-t")
+        .arg("1999-01-01")
+        .arg(&ctx.dst)
+        .arg(&out_fail)
+        .output()
+        .unwrap();
+    assert!(!out_early.status.success());
+
+    // 3. Refuses to restore into non-empty output directory without --allow-existing or --force
+    let out_populated = ctx.dir.join("out_populated");
+    fs::create_dir_all(&out_populated).unwrap();
+    fs::write(out_populated.join("existing.txt"), b"keep").unwrap();
+
+    let out_guard = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("restore")
+        .arg(&ctx.dst)
+        .arg(&out_populated)
+        .output()
+        .unwrap();
+    assert!(!out_guard.status.success());
+
+    // With --allow-existing, restore into populated directory succeeds
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("restore")
+        .arg("--allow-existing")
+        .arg(&ctx.dst)
+        .arg(&out_populated)
+        .status()
+        .unwrap()
+        .success());
+    assert_eq!(
+        fs::read_to_string(out_populated.join("item.txt")).unwrap(),
+        "v2"
+    );
+    assert_eq!(
+        fs::read_to_string(out_populated.join("existing.txt")).unwrap(),
+        "keep"
+    );
+}
+
+#[test]
+fn test_restore_heuristic_scan_recovery_when_file_moved() {
+    let ctx = TestContext::new("restore_scan_fallback");
+    ctx.write_src_file("important.txt", b"unique payload v1");
+
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap()
+        .success());
+
+    thread::sleep(Duration::from_millis(1050));
+    ctx.write_src_file("important.txt", b"different payload v2");
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap()
+        .success());
+
+    let hist_dir = ctx.dst.join(".version-history");
+    let snaps: Vec<_> = fs::read_dir(&hist_dir)
+        .unwrap()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.len() == 17 && n.contains('_'))
+        .collect();
+    let snap_dir = hist_dir.join(&snaps[0]);
+
+    // Rename the displaced file inside the snapshot directory so its exact path is missing,
+    // forcing `scan_recover_hierarchical_file` to find it by size + CRC32!
+    fs::rename(
+        snap_dir.join("important.txt"),
+        snap_dir.join("misplaced_important.txt"),
+    )
+    .unwrap();
+
+    let out_recovered = ctx.dir.join("out_recovered");
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("restore")
+        .arg("-v")
+        .arg("-t")
+        .arg(&snaps[0])
+        .arg(&ctx.dst)
+        .arg(&out_recovered)
+        .status()
+        .unwrap()
+        .success());
+    assert_eq!(
+        fs::read_to_string(out_recovered.join("important.txt")).unwrap(),
+        "unique payload v1"
+    );
+}

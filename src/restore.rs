@@ -91,10 +91,12 @@ pub fn run_restore(opts: &RestoreOptions, dest: &Path, target_out: &Path) -> io:
         let is_newer_than_history = snapshots
             .last()
             .is_none_or(|last| baseline.snapshot_name.as_str() > last.name.as_str());
-        if !baseline.snapshot_name.is_empty()
-            && is_newer_than_history
-            && target_time_str == baseline.snapshot_name.as_str()
-        {
+        let matches_baseline = target_time_str == baseline.snapshot_name.as_str()
+            || (baseline.snapshot_name.starts_with(target_time_str)
+                && !snapshots
+                    .iter()
+                    .any(|s| s.name.starts_with(target_time_str)));
+        if !baseline.snapshot_name.is_empty() && is_newer_than_history && matches_baseline {
             return restore_latest(
                 dest,
                 target_out,
@@ -114,7 +116,7 @@ pub fn run_restore(opts: &RestoreOptions, dest: &Path, target_out: &Path) -> io:
 
     let chosen_idx = snapshots
         .iter()
-        .rposition(|s| s.name.as_str() <= target_time_str);
+        .rposition(|s| s.name.as_str() <= target_time_str || s.name.starts_with(target_time_str));
 
     let chosen_idx = match chosen_idx {
         Some(idx) => idx,
@@ -155,21 +157,17 @@ pub fn run_restore(opts: &RestoreOptions, dest: &Path, target_out: &Path) -> io:
         // 1. Search from chosen_snapshot forward chronologically for the first displaced copy
         for snap in &snapshots[chosen_idx..] {
             let hist_candidate = snap.path.join(&state.path);
-            if let Ok(meta) = fs::symlink_metadata(&hist_candidate) {
-                if meta.file_type().is_file() {
-                    source_to_copy = Some(hist_candidate);
-                    break;
-                }
+            if file_matches_state(&hist_candidate, state) {
+                source_to_copy = Some(hist_candidate);
+                break;
             }
         }
 
         // 2. If never displaced after chosen_snapshot, use the untouched file in the live mirror
         if source_to_copy.is_none() {
             let live_candidate = dest.join(&state.path);
-            if let Ok(meta) = fs::symlink_metadata(&live_candidate) {
-                if meta.file_type().is_file() {
-                    source_to_copy = Some(live_candidate);
-                }
+            if file_matches_state(&live_candidate, state) {
+                source_to_copy = Some(live_candidate);
             }
         }
 
@@ -251,6 +249,9 @@ fn restore_latest(
         if entry.file_type().is_file() {
             if let Ok(rel) = path.strip_prefix(dest) {
                 let rel_str = crate::util::normalize_rel_path(rel);
+                if !is_safe_relative_path(&rel_str) {
+                    continue;
+                }
                 if let Some(filt) = filter {
                     if !matches_restore_filter(&rel_str, filt) {
                         continue;
@@ -260,17 +261,17 @@ fn restore_latest(
                 let counter = RESTORE_COPY_COUNTER.fetch_add(1, Ordering::Relaxed);
                 copy_atomic(path, &out_file, pid, counter)?;
 
-                if let Ok((_, _, mtime)) = get_file_metadata(path) {
-                    let _ = set_file_mtime(&out_file, mtime);
-                }
+                let baseline_entry = baseline_state_map
+                    .as_ref()
+                    .and_then(|map| map.get(rel_str.as_str()).copied());
 
-                if preserve_permissions {
-                    let rel_str = crate::util::normalize_rel_path(rel);
-                    if let Some(ref map) = baseline_state_map {
-                        if let Some(st) = map.get(rel_str.as_str()) {
-                            let _ = apply_file_permissions(&out_file, st.mode, st.readonly);
-                        }
+                if let Some(st) = baseline_entry {
+                    let _ = set_file_mtime(&out_file, mtime_ns_to_system_time(st.mtime_ns));
+                    if preserve_permissions {
+                        let _ = apply_file_permissions(&out_file, st.mode, st.readonly);
                     }
+                } else if let Ok((_, _, mtime)) = get_file_metadata(path) {
+                    let _ = set_file_mtime(&out_file, mtime);
                 }
 
                 count += 1;
@@ -304,6 +305,10 @@ fn run_restore_flat(opts: &RestoreOptions, dest: &Path, target_out: &Path) -> io
 
     if target_time_str == "latest"
         || target_time_str == flat_manifest.baseline.snapshot_name.as_str()
+        || flat_manifest
+            .baseline
+            .snapshot_name
+            .starts_with(target_time_str)
     {
         return restore_flat_manifest(
             &flat_manifest.baseline.state,
@@ -315,11 +320,10 @@ fn run_restore_flat(opts: &RestoreOptions, dest: &Path, target_out: &Path) -> io
         );
     }
 
-    // Find snapshot at or prior to target_time_str
-    let chosen_idx = flat_manifest
-        .snapshots
-        .iter()
-        .rposition(|s| s.snapshot_name.as_str() <= target_time_str);
+    // Find snapshot at or prior to target_time_str (supporting prefix match like "2026-11-09")
+    let chosen_idx = flat_manifest.snapshots.iter().rposition(|s| {
+        s.snapshot_name.as_str() <= target_time_str || s.snapshot_name.starts_with(target_time_str)
+    });
 
     let chosen_idx = match chosen_idx {
         Some(idx) => idx,
