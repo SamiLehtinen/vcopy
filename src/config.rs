@@ -236,6 +236,21 @@ pub struct ConfigFile {
 
     #[serde(
         default,
+        alias = "include",
+        alias = "filter",
+        alias = "path-filter",
+        alias = "path_filter",
+        alias = "--include",
+        alias = "--filter",
+        alias = "-i"
+    )]
+    pub include: Option<String>,
+
+    #[serde(default, alias = "quick", alias = "--quick")]
+    pub quick: Option<bool>,
+
+    #[serde(
+        default,
         alias = "command",
         alias = "action",
         alias = "subcommand",
@@ -627,6 +642,28 @@ pub fn parse_cli_or_keyval_config(content: &str) -> Result<ConfigFile, String> {
             "target-out" | "target_out" | "output" | "output-dir" | "output_dir" => {
                 let v = get_val(&mut i, inline_val)?;
                 cfg.target_out = Some(PathBuf::from(v));
+            }
+            "include" | "filter" | "path-filter" | "path_filter" | "i" => {
+                let v = get_val(&mut i, inline_val)?;
+                cfg.include = Some(v);
+            }
+            "quick" => {
+                if let Some(v) = inline_val {
+                    cfg.quick = Some(v.parse::<bool>().unwrap_or(true));
+                } else if i + 1 < raw_tokens.len()
+                    && (raw_tokens[i + 1] == "true" || raw_tokens[i + 1] == "false")
+                {
+                    i += 1;
+                    cfg.quick = Some(raw_tokens[i] == "true");
+                } else if i + 2 < raw_tokens.len()
+                    && raw_tokens[i + 1] == "="
+                    && (raw_tokens[i + 2] == "true" || raw_tokens[i + 2] == "false")
+                {
+                    i += 2;
+                    cfg.quick = Some(raw_tokens[i] == "true");
+                } else {
+                    cfg.quick = Some(true);
+                }
             }
             "command" | "action" | "subcommand" | "mode" => {
                 let v = get_val(&mut i, inline_val)?;

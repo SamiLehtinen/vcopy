@@ -138,7 +138,12 @@ struct Cli {
     verbose: bool,
 
     /// Copy files into destination root without source directory prefixes (flat mode)
-    #[arg(long = "flat", alias = "flatten", visible_alias = "flatten")]
+    #[arg(
+        long = "flat",
+        alias = "flatten",
+        visible_alias = "flatten",
+        global = true
+    )]
     flat: bool,
 
     /// In flat mode, use timestamp in archived version names (<stem>.<TIMESTAMP>.<ext>) instead of monotonic .v<N>
@@ -687,7 +692,9 @@ fn execute() -> Result<(), String> {
             target_out: r_target_out,
             path_filter,
         }) => {
-            let filter = include.or(path_filter);
+            let filter = include
+                .or(path_filter)
+                .or_else(|| cfg.as_ref().and_then(|c| c.include.clone()));
             let restore_opts = RestoreOptions {
                 target_time: r_target_time.or_else(|| target_time.clone()),
                 filter,
@@ -728,7 +735,7 @@ fn execute() -> Result<(), String> {
             dest: v_dest,
         }) => {
             let verify_opts = VerifyOptions {
-                quick,
+                quick: quick || cfg.as_ref().and_then(|c| c.quick).unwrap_or(false),
                 verbose: v_verbose || verbose,
                 target_time: v_target_time.or_else(|| target_time.clone()),
             };
