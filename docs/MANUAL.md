@@ -232,7 +232,7 @@ vcopy prune -n 5 --dry-run -v /mnt/usb/backup
 | `--quick` | | Flag | `false` | In verify / check mode, perform quick checks using size/mtime (with 2-second FAT/exFAT tolerance), skipping full file CRC32 recalculation. |
 | `--verbose` | `-v` | Flag | `false` | Enable detailed output listing every copied, modified, or deleted file. |
 | `--manual` | | Flag | | Print this complete user manual in ASCII / man-page format. *(Alias: `--man`)* |
-| `--manual-markdown` | | Flag | | Print this complete user manual in Markdown format. *(Aliases: `--manual-md`, `--markdown`)* |
+| `--manual-markdown` | | Flag | | Print this complete user manual in Markdown format. *(Aliases: `--manual-md`, `--man-md`, `--markdown`)* |
 
 ### Retention Policy Options (GFS & Count)
 

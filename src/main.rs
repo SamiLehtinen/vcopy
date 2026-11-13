@@ -212,7 +212,12 @@ struct Cli {
     manual: bool,
 
     /// Display the complete user manual in Markdown format
-    #[arg(long = "manual-markdown", alias = "manual-md", global = true)]
+    #[arg(
+        long = "manual-markdown",
+        alias = "manual-md",
+        alias = "man-md",
+        global = true
+    )]
     manual_markdown: bool,
 }
 

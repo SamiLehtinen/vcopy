@@ -235,7 +235,7 @@ vcopy [OPTIONS] [SOURCES... DEST]... [COMMAND]
 | `--dry-run` | Flag | `false` | Simulate execution and display planned operations without modifying the filesystem. |
 | `-v, --verbose` | Flag | `false` | Print detailed information about copied, modified, and deleted files. |
 | `--manual` | Flag | | Print the complete user manual in ASCII / man-page format. *(Alias: `--man`)* |
-| `--manual-markdown` | Flag | | Print the complete user manual in Markdown format. *(Aliases: `--manual-md`, `--markdown`)* |
+| `--manual-markdown` | Flag | | Print the complete user manual in Markdown format. *(Aliases: `--manual-md`, `--man-md`, `--markdown`)* |
 
 ### Retention Policy Options (GFS & Count)
 

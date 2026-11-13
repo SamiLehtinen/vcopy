@@ -884,7 +884,7 @@ fn test_manual_embedded_ascii_and_markdown() {
     assert!(!stdout.contains("**"));
     assert!(!stdout.contains("$N$"));
 
-    // 2. Test --manual-markdown flag
+    // 2. Test --manual-markdown and --man-md flags
     let out_md = Command::new(env!("CARGO_BIN_EXE_vcopy"))
         .arg("--manual-markdown")
         .output()
@@ -894,6 +894,13 @@ fn test_manual_embedded_ascii_and_markdown() {
     assert!(stdout_md.contains("# VCOPY(1) User Manual"));
     assert!(stdout_md.contains("## QUICK START & SIMPLE EXAMPLES"));
     assert!(stdout_md.contains("## PARAMETER & OPTIONS REFERENCE"));
+
+    let out_man_md = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--man-md")
+        .output()
+        .unwrap();
+    assert!(out_man_md.status.success());
+    assert_eq!(out_man_md.stdout, out_md.stdout);
 
     // 3. Test 'manual' subcommand
     let out_sub = Command::new(env!("CARGO_BIN_EXE_vcopy"))
