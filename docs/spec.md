@@ -1,6 +1,6 @@
 # Engineering Specification: `vcopy`
 
-**Version:** 0.3.1  
+**Version:** 0.3.2  
 **Author:** Sami Lehtinen  
 **License:** 0BSD  
 
@@ -340,11 +340,15 @@ keep-yearly = 1
 
 Precedence: CLI command-line flags and positional arguments always override settings defined in any configuration file.
 
+### Command & Parameter Suggestions (`Did you mean ...?`)
+* **CLI Flags & Subcommands:** Uses `clap` suggestions together with pure-Rust Damerau-Levenshtein edit distance (`damerau_levenshtein` / `suggest_closest` in `src/util.rs`) to suggest the closest valid flag or subcommand when an unknown option, trailing flag typo, subcommand-as-flag (e.g., `--prune`), or misspelled subcommand (e.g., `vcopy prun /dest`, `vcopy manul`) is entered. Real existing paths in the current working directory (and runs with `--allow-missing-source` or `--force`) are never intercepted as subcommand typos.
+* **Configuration Validation:** Unknown options or invalid `command` values in CLI-style, key-value, TOML, or JSON configuration files are rejected with a `"Did you mean ...?"` suggestion.
+
 ---
 
 ## 6. Test Suite & Verification
 
-The automated test suite consists of 56 tests covering core functionality, edge cases, and safety invariants:
+The automated test suite consists of 59 tests covering core functionality, edge cases, and safety invariants:
 
 * `tests/integration_tests.rs`:
   * `test_basic_backup_and_versioning`: Verifies initial mirror sync, subsequent modifications, and historical archiving.
@@ -373,6 +377,7 @@ The automated test suite consists of 56 tests covering core functionality, edge 
   * `test_orphan_scan_recovery_hierarchical_mode` & `test_orphan_scan_recovery_flat_mode`: Verifies manifest-less orphan scan recovery.
   * `test_total_wipeout_circuit_breaker`, `test_missing_source_path_protection`, & `test_destination_safety_guards`: Verifies safety circuit breakers and protected directory guards.
   * `test_shorter_cli_flags_and_aliases`, `test_stale_pid_lock_recovery`, `test_self_healing_missing_destination_file`, & `test_nested_vcopyignore_and_config_subcommands`: Verifies CLI aliases, lock recovery, self-healing mirror sync, and nested `.vcopyignore`.
+  * `test_command_and_parameter_suggestions`: Verifies `"Did you mean ...?"` suggestions for misspelled subcommands, trailing flag typos, subcommands passed as flags, and invalid configuration commands/options while preserving real source paths.
 * `tests/prune_tests.rs`:
   * `test_count_based_pruning`: Verifies `-n <N>` snapshot pruning.
   * `test_prune_preserves_older_snapshot_restore`: Verifies reverse-delta consolidation when intermediate snapshots are pruned.
@@ -388,6 +393,6 @@ The automated test suite consists of 56 tests covering core functionality, edge 
   * `test_partial_and_single_path_restore`: Verifies single-file restore, subtree restore, and wildcard glob filtering in hierarchical and flat modes.
   * `test_restore_heuristic_scan_recovery_when_file_moved` & `test_restore_timestamp_prefix_and_safety_guards`: Verifies heuristic file recovery and timestamp prefix matching.
 * Unit tests in `src/config.rs`, `src/exclude.rs`, `src/lock.rs`, `src/manual.rs`, `src/restore.rs`, and `src/util.rs`:
-  * Config key-value/TOML/JSON parsing, Windows paths, and `-0, --no-defaults` aliases.
+  * Config key-value/TOML/JSON parsing, Windows paths, `-0, --no-defaults` aliases, and unknown option suggestions.
   * Pattern matching, directory exclusions, comments, and nested prefix handling.
-  * PID lock stale recovery, ASCII manual rendering, restore filter wildcards, and human-readable byte sizing.
+  * PID lock stale recovery, ASCII manual rendering, restore filter wildcards, Damerau-Levenshtein edit-distance suggestions, and human-readable byte sizing.

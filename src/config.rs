@@ -30,7 +30,7 @@ impl PathsValue {
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ConfigFile {
     #[serde(
         default,
@@ -39,7 +39,8 @@ pub struct ConfigFile {
         alias = "paths",
         alias = "--sources",
         alias = "--source",
-        alias = "-s"
+        alias = "-s",
+        alias = "s"
     )]
     pub sources: Option<PathsValue>,
 
@@ -49,7 +50,8 @@ pub struct ConfigFile {
         alias = "destination",
         alias = "--dest",
         alias = "--destination",
-        alias = "-d"
+        alias = "-d",
+        alias = "d"
     )]
     pub dest: Option<PathBuf>,
 
@@ -64,7 +66,8 @@ pub struct ConfigFile {
         alias = "--paths-from",
         alias = "--files-from",
         alias = "--sources-from",
-        alias = "-f"
+        alias = "-f",
+        alias = "f"
     )]
     pub paths_from: Option<PathsValue>,
 
@@ -73,7 +76,8 @@ pub struct ConfigFile {
         alias = "max-versions",
         alias = "max_versions",
         alias = "--max-versions",
-        alias = "-n"
+        alias = "-n",
+        alias = "n"
     )]
     pub max_versions: Option<usize>,
 
@@ -145,7 +149,13 @@ pub struct ConfigFile {
     #[serde(default, alias = "dry-run", alias = "dry_run", alias = "--dry-run")]
     pub dry_run: Option<bool>,
 
-    #[serde(default, alias = "verbose", alias = "--verbose", alias = "-v")]
+    #[serde(
+        default,
+        alias = "verbose",
+        alias = "--verbose",
+        alias = "-v",
+        alias = "v"
+    )]
     pub verbose: Option<bool>,
 
     #[serde(
@@ -162,7 +172,9 @@ pub struct ConfigFile {
         alias = "flat-date",
         alias = "flat_date",
         alias = "flat-dates",
-        alias = "--flat-date"
+        alias = "flat_dates",
+        alias = "--flat-date",
+        alias = "--flat-dates"
     )]
     pub flat_date: Option<bool>,
 
@@ -175,11 +187,12 @@ pub struct ConfigFile {
         alias = "--preserve-permissions",
         alias = "--permissions",
         alias = "--perms",
-        alias = "-p"
+        alias = "-p",
+        alias = "p"
     )]
     pub preserve_permissions: Option<bool>,
 
-    #[serde(default, alias = "force", alias = "--force", alias = "-F")]
+    #[serde(default, alias = "force", alias = "--force", alias = "-F", alias = "F")]
     pub force: Option<bool>,
 
     #[serde(
@@ -212,7 +225,8 @@ pub struct ConfigFile {
         alias = "excludes",
         alias = "ignore",
         alias = "--exclude",
-        alias = "-e"
+        alias = "-e",
+        alias = "e"
     )]
     pub exclude: Option<PathsValue>,
 
@@ -220,7 +234,10 @@ pub struct ConfigFile {
         default,
         alias = "exclude-from",
         alias = "exclude_from",
-        alias = "--exclude-from"
+        alias = "ignore-from",
+        alias = "ignore_from",
+        alias = "--exclude-from",
+        alias = "--ignore-from"
     )]
     pub exclude_from: Option<PathsValue>,
 
@@ -233,7 +250,8 @@ pub struct ConfigFile {
         alias = "--target-time",
         alias = "--time",
         alias = "--snapshot",
-        alias = "-t"
+        alias = "-t",
+        alias = "t"
     )]
     pub target_time: Option<String>,
 
@@ -245,7 +263,8 @@ pub struct ConfigFile {
         alias = "output-dir",
         alias = "output_dir",
         alias = "--target-out",
-        alias = "--output"
+        alias = "--output",
+        alias = "--output-dir"
     )]
     pub target_out: Option<PathBuf>,
 
@@ -257,7 +276,9 @@ pub struct ConfigFile {
         alias = "path_filter",
         alias = "--include",
         alias = "--filter",
-        alias = "-i"
+        alias = "--path-filter",
+        alias = "-i",
+        alias = "i"
     )]
     pub include: Option<String>,
 
@@ -385,6 +406,56 @@ fn tokenize_config(content: &str) -> Vec<String> {
     }
     tokens
 }
+
+const CONFIG_OPTION_CANDIDATES: &[&str] = &[
+    "dest",
+    "destination",
+    "sources",
+    "source",
+    "paths-from",
+    "files-from",
+    "sources-from",
+    "exclude",
+    "exclude-from",
+    "flatten",
+    "flat",
+    "flat-date",
+    "flat-dates",
+    "preserve-permissions",
+    "perms",
+    "permissions",
+    "force",
+    "allow-existing",
+    "allow-empty-source",
+    "allow-missing-source",
+    "dry-run",
+    "verbose",
+    "max-versions",
+    "keep-hourly",
+    "hourly",
+    "keep-daily",
+    "daily",
+    "keep-weekly",
+    "weekly",
+    "keep-monthly",
+    "monthly",
+    "keep-yearly",
+    "yearly",
+    "no-defaults",
+    "zero-defaults",
+    "no-keep-defaults",
+    "target-time",
+    "time",
+    "snapshot",
+    "target-out",
+    "output",
+    "output-dir",
+    "include",
+    "filter",
+    "path-filter",
+    "quick",
+    "command",
+];
 
 /// Parse configuration written directly in CLI arguments format or key-value format
 pub fn parse_cli_or_keyval_config(content: &str) -> Result<ConfigFile, String> {
@@ -727,8 +798,19 @@ pub fn parse_cli_or_keyval_config(content: &str) -> Result<ConfigFile, String> {
                 cfg.command = Some(tok.to_string());
             }
             _ => {
-                if tok.starts_with('-') {
-                    return Err(format!("Unknown configuration option '{}'", tok));
+                let is_key_assignment =
+                    inline_val.is_some() || (i + 1 < raw_tokens.len() && raw_tokens[i + 1] == "=");
+                if tok.starts_with('-') || is_key_assignment {
+                    let prefix = if key.starts_with('-') { "--" } else { "" };
+                    if let Some(suggested) =
+                        crate::util::suggest_closest(norm_key, CONFIG_OPTION_CANDIDATES)
+                    {
+                        return Err(format!(
+                            "Unknown configuration option '{}'. Did you mean '{}{}'?",
+                            key, prefix, suggested
+                        ));
+                    }
+                    return Err(format!("Unknown configuration option '{}'", key));
                 }
                 positional.push(PathBuf::from(tok));
             }
@@ -794,10 +876,23 @@ pub fn load_config(path: &Path) -> Result<ConfigFile, String> {
         Err(cli_err) => {
             if is_json {
                 serde_json::from_str::<ConfigFile>(&content).map_err(|e| {
+                    let err_str = e.to_string();
+                    let hint = err_str
+                        .split('`')
+                        .nth(1)
+                        .and_then(|field| {
+                            crate::util::suggest_closest(
+                                field.trim_start_matches('-'),
+                                CONFIG_OPTION_CANDIDATES,
+                            )
+                        })
+                        .map(|s| format!(" (Did you mean '{}'?)", s))
+                        .unwrap_or_default();
                     format!(
-                        "Failed to parse JSON configuration file '{}': {}",
+                        "Failed to parse JSON configuration file '{}': {}{}",
                         path.display(),
-                        e
+                        err_str,
+                        hint
                     )
                 })
             } else {
@@ -872,5 +967,29 @@ sources = D:\Data\Backup
         assert_eq!(cfg.no_defaults, None);
         assert_eq!(cfg.get_sources(), vec![PathBuf::from("0")]);
         assert_eq!(cfg.dest.as_deref(), Some(Path::new("/tmp/dest")));
+    }
+
+    #[test]
+    fn test_unknown_config_option_suggestions() {
+        let err = parse_cli_or_keyval_config("--kepe-daily 7").unwrap_err();
+        assert!(
+            err.contains("Did you mean '--keep-daily'"),
+            "Unexpected error: {}",
+            err
+        );
+
+        let err2 = parse_cli_or_keyval_config("--dryrun").unwrap_err();
+        assert!(
+            err2.contains("Did you mean '--dry-run'"),
+            "Unexpected error: {}",
+            err2
+        );
+
+        let err3 = parse_cli_or_keyval_config("kepe-daily = 7").unwrap_err();
+        assert!(
+            err3.contains("Did you mean 'keep-daily'"),
+            "Unexpected error: {}",
+            err3
+        );
     }
 }

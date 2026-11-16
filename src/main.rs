@@ -28,7 +28,7 @@ use verify::{run_verify, VerifyOptions};
 #[command(
     name = "vcopy",
     author = "Sami Lehtinen",
-    version = "0.3.1",
+    version = "0.3.2",
     about = "Browseable zero-link backup tool with history",
     long_about = "vcopy creates directly browseable, uncompressed filesystem mirrors on external drives and non-snapshotting filesystems (exFAT, FAT32, NTFS, ext4, APFS) while preserving a full historical change record in .version-history/.",
     subcommand_precedence_over_arg = true
@@ -38,7 +38,7 @@ struct Cli {
     command: Option<Commands>,
 
     /// Source paths followed by destination directory (<SOURCES>... <DEST>)
-    #[arg(value_name = "SOURCES... DEST", trailing_var_arg = true)]
+    #[arg(value_name = "SOURCES... DEST")]
     args: Vec<PathBuf>,
 
     /// Explicit source paths (can be specified multiple times or comma-separated)
@@ -81,7 +81,7 @@ struct Cli {
     paths_from: Vec<String>,
 
     /// Maximum number of snapshots to keep (overrides GFS retention)
-    #[arg(short = 'n', long = "max-versions", value_name = "N")]
+    #[arg(short = 'n', long = "max-versions", value_name = "N", global = true)]
     max_versions: Option<usize>,
 
     /// Number of hourly snapshot buckets to retain in GFS mode (default: 24)
@@ -89,7 +89,8 @@ struct Cli {
         long = "keep-hourly",
         alias = "hourly",
         visible_alias = "hourly",
-        value_name = "N"
+        value_name = "N",
+        global = true
     )]
     keep_hourly: Option<usize>,
 
@@ -98,7 +99,8 @@ struct Cli {
         long = "keep-daily",
         alias = "daily",
         visible_alias = "daily",
-        value_name = "N"
+        value_name = "N",
+        global = true
     )]
     keep_daily: Option<usize>,
 
@@ -107,7 +109,8 @@ struct Cli {
         long = "keep-weekly",
         alias = "weekly",
         visible_alias = "weekly",
-        value_name = "N"
+        value_name = "N",
+        global = true
     )]
     keep_weekly: Option<usize>,
 
@@ -116,7 +119,8 @@ struct Cli {
         long = "keep-monthly",
         alias = "monthly",
         visible_alias = "monthly",
-        value_name = "N"
+        value_name = "N",
+        global = true
     )]
     keep_monthly: Option<usize>,
 
@@ -125,7 +129,8 @@ struct Cli {
         long = "keep-yearly",
         alias = "yearly",
         visible_alias = "yearly",
-        value_name = "N"
+        value_name = "N",
+        global = true
     )]
     keep_yearly: Option<usize>,
 
@@ -136,16 +141,17 @@ struct Cli {
         alias = "zero-defaults",
         visible_alias = "zero-defaults",
         alias = "no-keep-defaults",
-        visible_alias = "no-keep-defaults"
+        visible_alias = "no-keep-defaults",
+        global = true
     )]
     no_defaults: bool,
 
     /// Perform a trial run without making any filesystem modifications
-    #[arg(long = "dry-run")]
+    #[arg(long = "dry-run", global = true)]
     dry_run: bool,
 
     /// Print detailed information about copied, modified, and deleted files
-    #[arg(short = 'v', long = "verbose")]
+    #[arg(short = 'v', long = "verbose", global = true)]
     verbose: bool,
 
     /// Copy files into destination root without source directory prefixes (flat mode)
@@ -168,7 +174,8 @@ struct Cli {
         alias = "target-time",
         visible_alias = "target-time",
         alias = "snapshot",
-        value_name = "TIMESTAMP"
+        value_name = "TIMESTAMP",
+        global = true
     )]
     target_time: Option<String>,
 
@@ -237,102 +244,23 @@ enum Commands {
     /// Auto create backup and prune old snapshots (default)
     Auto {
         /// Source paths followed by destination directory (<SOURCES>... <DEST>)
-        #[arg(value_name = "SOURCES... DEST", trailing_var_arg = true)]
+        #[arg(value_name = "SOURCES... DEST")]
         paths: Vec<PathBuf>,
     },
     /// Create a new backup snapshot without pruning
     Create {
         /// Source paths followed by destination directory (<SOURCES>... <DEST>)
-        #[arg(value_name = "SOURCES... DEST", trailing_var_arg = true)]
+        #[arg(value_name = "SOURCES... DEST")]
         paths: Vec<PathBuf>,
     },
     /// Prune old snapshots according to retention policy
     Prune {
-        /// Maximum number of snapshots to keep (overrides GFS retention)
-        #[arg(short = 'n', long = "max-versions", value_name = "N")]
-        max_versions: Option<usize>,
-
-        /// Number of hourly snapshot buckets to retain
-        #[arg(
-            long = "keep-hourly",
-            alias = "hourly",
-            visible_alias = "hourly",
-            value_name = "N"
-        )]
-        keep_hourly: Option<usize>,
-
-        /// Number of daily snapshot buckets to retain
-        #[arg(
-            long = "keep-daily",
-            alias = "daily",
-            visible_alias = "daily",
-            value_name = "N"
-        )]
-        keep_daily: Option<usize>,
-
-        /// Number of weekly snapshot buckets to retain
-        #[arg(
-            long = "keep-weekly",
-            alias = "weekly",
-            visible_alias = "weekly",
-            value_name = "N"
-        )]
-        keep_weekly: Option<usize>,
-
-        /// Number of monthly snapshot buckets to retain
-        #[arg(
-            long = "keep-monthly",
-            alias = "monthly",
-            visible_alias = "monthly",
-            value_name = "N"
-        )]
-        keep_monthly: Option<usize>,
-
-        /// Number of yearly snapshot buckets to retain
-        #[arg(
-            long = "keep-yearly",
-            alias = "yearly",
-            visible_alias = "yearly",
-            value_name = "N"
-        )]
-        keep_yearly: Option<usize>,
-
-        /// Default unspecified --keep-* retention buckets to 0 instead of their standard defaults
-        #[arg(
-            short = '0',
-            long = "no-defaults",
-            alias = "zero-defaults",
-            visible_alias = "zero-defaults",
-            alias = "no-keep-defaults",
-            visible_alias = "no-keep-defaults"
-        )]
-        no_defaults: bool,
-
-        /// Simulate pruning without deleting snapshot directories
-        #[arg(long = "dry-run")]
-        dry_run: bool,
-
-        /// Print details about snapshots being kept and pruned
-        #[arg(short = 'v', long = "verbose")]
-        verbose: bool,
-
         /// Destination backup directory containing .version-history/
         #[arg(value_name = "DEST")]
         dest: Option<PathBuf>,
     },
     /// Restore files from a specific snapshot or point in time
     Restore {
-        /// Target snapshot timestamp (YYYY-MM-DD_HHMMSS) or 'latest'
-        #[arg(
-            short = 't',
-            long = "time",
-            alias = "target-time",
-            visible_alias = "target-time",
-            alias = "snapshot",
-            value_name = "TIMESTAMP"
-        )]
-        target_time: Option<String>,
-
         /// Optional path or pattern filter to restore (e.g. 'docs/', 'report.pdf', or '*.txt')
         #[arg(
             short = 'i',
@@ -342,10 +270,6 @@ enum Commands {
             value_name = "PATH_OR_GLOB"
         )]
         include: Option<String>,
-
-        /// Print restored file paths
-        #[arg(short = 'v', long = "verbose")]
-        verbose: bool,
 
         /// Backup directory containing mirror and .version-history/
         #[arg(value_name = "DEST")]
@@ -372,21 +296,6 @@ enum Commands {
         /// Perform quick check (size and mtime only, skips reading full file content)
         #[arg(long = "quick")]
         quick: bool,
-
-        /// Target snapshot timestamp (YYYY-MM-DD_HHMMSS or prefix) or 'latest'
-        #[arg(
-            short = 't',
-            long = "time",
-            alias = "target-time",
-            visible_alias = "target-time",
-            alias = "snapshot",
-            value_name = "TIMESTAMP"
-        )]
-        target_time: Option<String>,
-
-        /// Print verified file details and untracked files
-        #[arg(short = 'v', long = "verbose")]
-        verbose: bool,
 
         /// Backup directory containing mirror and .version-history/
         #[arg(value_name = "DEST")]
@@ -468,8 +377,40 @@ fn resolve_sources_and_dest(
     Ok((unique, dest))
 }
 
+const SUBCOMMAND_CANDIDATES: &[&str] = &[
+    "auto", "create", "prune", "restore", "list", "ls", "verify", "check", "manual", "man",
+];
+
+fn parse_cli_with_suggestions() -> Cli {
+    match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(err) => {
+            if err.kind() == clap::error::ErrorKind::UnknownArgument {
+                let has_flag_suggestion = err.get(clap::error::ContextKind::SuggestedArg).is_some();
+                if !has_flag_suggestion {
+                    if let Some(clap::error::ContextValue::String(arg)) =
+                        err.get(clap::error::ContextKind::InvalidArg)
+                    {
+                        let stripped = arg.trim_start_matches('-');
+                        if let Some(subcmd) = util::suggest_closest(stripped, SUBCOMMAND_CANDIDATES)
+                        {
+                            let _ = err.print();
+                            eprintln!(
+                                "  tip: '{}' is a subcommand, not a flag. Try: vcopy {} ...",
+                                subcmd, subcmd
+                            );
+                            process::exit(err.exit_code());
+                        }
+                    }
+                }
+            }
+            err.exit();
+        }
+    }
+}
+
 fn execute() -> Result<(), String> {
-    let cli = Cli::parse();
+    let cli = parse_cli_with_suggestions();
 
     if cli.manual_markdown {
         manual::print_manual_markdown();
@@ -511,6 +452,20 @@ fn execute() -> Result<(), String> {
             .as_ref()
             .and_then(|c| c.allow_missing_source)
             .unwrap_or(false);
+
+    if cli.command.is_none() && !cli.args.is_empty() && !allow_missing_source && !force {
+        if let Some(first) = cli.args.first().and_then(|p| p.to_str()) {
+            if !first.contains('/') && !first.contains('\\') && !cli.args[0].exists() {
+                if let Some(suggested) = util::suggest_closest(first, SUBCOMMAND_CANDIDATES) {
+                    return Err(format!(
+                        "Error: unknown command '{}'. Did you mean 'vcopy {}'? (If '{}' is a source path, create it or pass --allow-missing-source.)",
+                        first, suggested, first
+                    ));
+                }
+            }
+        }
+    }
+
     let flatten = cli.flat || cfg.as_ref().and_then(|c| c.flatten).unwrap_or(false);
     let flat_date = cli.flat_date || cfg.as_ref().and_then(|c| c.flat_date).unwrap_or(false);
     let dry_run = cli.dry_run || cfg.as_ref().and_then(|c| c.dry_run).unwrap_or(false);
@@ -542,26 +497,15 @@ fn execute() -> Result<(), String> {
         .keep_yearly
         .or_else(|| cfg.as_ref().and_then(|c| c.keep_yearly));
 
-    let resolve_prune_opts = |nd: bool,
-                              p_max: Option<usize>,
-                              p_h: Option<usize>,
-                              p_d: Option<usize>,
-                              p_w: Option<usize>,
-                              p_m: Option<usize>,
-                              p_y: Option<usize>,
-                              p_dry: bool,
-                              p_verb: bool|
-     -> PruneOptions {
-        PruneOptions {
-            max_versions: p_max.or(max_versions),
-            keep_hourly: p_h.or(keep_hourly_opt).unwrap_or(if nd { 0 } else { 24 }),
-            keep_daily: p_d.or(keep_daily_opt).unwrap_or(if nd { 0 } else { 7 }),
-            keep_weekly: p_w.or(keep_weekly_opt).unwrap_or(if nd { 0 } else { 4 }),
-            keep_monthly: p_m.or(keep_monthly_opt).unwrap_or(if nd { 0 } else { 12 }),
-            keep_yearly: p_y.or(keep_yearly_opt).unwrap_or(if nd { 0 } else { 1 }),
-            dry_run: p_dry || dry_run,
-            verbose: p_verb || verbose,
-        }
+    let prune_opts = PruneOptions {
+        max_versions,
+        keep_hourly: keep_hourly_opt.unwrap_or(if no_defaults { 0 } else { 24 }),
+        keep_daily: keep_daily_opt.unwrap_or(if no_defaults { 0 } else { 7 }),
+        keep_weekly: keep_weekly_opt.unwrap_or(if no_defaults { 0 } else { 4 }),
+        keep_monthly: keep_monthly_opt.unwrap_or(if no_defaults { 0 } else { 12 }),
+        keep_yearly: keep_yearly_opt.unwrap_or(if no_defaults { 0 } else { 1 }),
+        dry_run,
+        verbose,
     };
     let target_time = cli
         .target_time
@@ -608,38 +552,14 @@ fn execute() -> Result<(), String> {
         exclude_filter,
     };
 
-    let prune_opts = resolve_prune_opts(
-        no_defaults,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        false,
-        false,
-    );
-
-    let effective_command = cli.command.or_else(|| {
-        cfg.as_ref()
-            .and_then(|c| c.command.as_deref())
-            .and_then(|cmd_str| match cmd_str.to_ascii_lowercase().as_str() {
-                "prune" => Some(Commands::Prune {
-                    max_versions: None,
-                    keep_hourly: None,
-                    keep_daily: None,
-                    keep_weekly: None,
-                    keep_monthly: None,
-                    keep_yearly: None,
-                    no_defaults: false,
-                    dry_run: false,
-                    verbose: false,
-                    dest: None,
-                }),
+    let effective_command = match cli.command {
+        Some(cmd) => Some(cmd),
+        None => match cfg.as_ref().and_then(|c| c.command.as_deref()) {
+            None => None,
+            Some(cmd_str) => match cmd_str.to_ascii_lowercase().as_str() {
+                "prune" => Some(Commands::Prune { dest: None }),
                 "restore" => Some(Commands::Restore {
-                    target_time: None,
                     include: None,
-                    verbose: false,
                     dest: None,
                     target_out: None,
                     path_filter: None,
@@ -647,16 +567,27 @@ fn execute() -> Result<(), String> {
                 "list" | "ls" => Some(Commands::List { dest: None }),
                 "verify" | "check" => Some(Commands::Verify {
                     quick: false,
-                    target_time: None,
-                    verbose: false,
                     dest: None,
                 }),
                 "manual" | "man" => Some(Commands::Manual { markdown: false }),
                 "create" => Some(Commands::Create { paths: Vec::new() }),
                 "auto" => Some(Commands::Auto { paths: Vec::new() }),
-                _ => None,
-            })
-    });
+                _ => {
+                    let msg = match util::suggest_closest(cmd_str, SUBCOMMAND_CANDIDATES) {
+                        Some(s) => format!(
+                            "Error: unknown command '{}' in configuration. Did you mean '{}'?",
+                            cmd_str, s
+                        ),
+                        None => format!(
+                            "Error: unknown command '{}' in configuration. Valid commands: auto, create, prune, restore, list, verify, manual.",
+                            cmd_str
+                        ),
+                    };
+                    return Err(msg);
+                }
+            },
+        },
+    };
 
     match effective_command {
         None => {
@@ -702,29 +633,7 @@ fn execute() -> Result<(), String> {
             )?;
             run_create(&sync_opts, &sources, &dest).map_err(|e| e.to_string())?;
         }
-        Some(Commands::Prune {
-            max_versions: p_max_versions,
-            keep_hourly: p_keep_hourly,
-            keep_daily: p_keep_daily,
-            keep_weekly: p_keep_weekly,
-            keep_monthly: p_keep_monthly,
-            keep_yearly: p_keep_yearly,
-            no_defaults: p_no_defaults,
-            dry_run: p_dry_run,
-            verbose: p_verbose,
-            dest: p_dest,
-        }) => {
-            let specific_prune_opts = resolve_prune_opts(
-                p_no_defaults || no_defaults,
-                p_max_versions,
-                p_keep_hourly,
-                p_keep_daily,
-                p_keep_weekly,
-                p_keep_monthly,
-                p_keep_yearly,
-                p_dry_run,
-                p_verbose,
-            );
+        Some(Commands::Prune { dest: p_dest }) => {
             let effective_dest = p_dest
                 .or_else(|| cli.dest.clone())
                 .or_else(|| cfg.as_ref().and_then(|c| c.dest.clone()))
@@ -732,12 +641,10 @@ fn execute() -> Result<(), String> {
                     "Error: Destination directory required via argument, --dest, or --config."
                         .to_string()
                 })?;
-            run_prune(&specific_prune_opts, &effective_dest).map_err(|e| e.to_string())?;
+            run_prune(&prune_opts, &effective_dest).map_err(|e| e.to_string())?;
         }
         Some(Commands::Restore {
-            target_time: r_target_time,
             include,
-            verbose: r_verbose,
             dest: r_dest,
             target_out: r_target_out,
             path_filter,
@@ -746,9 +653,9 @@ fn execute() -> Result<(), String> {
                 .or(path_filter)
                 .or_else(|| cfg.as_ref().and_then(|c| c.include.clone()));
             let restore_opts = RestoreOptions {
-                target_time: r_target_time.or_else(|| target_time.clone()),
+                target_time,
                 filter,
-                verbose: r_verbose || verbose,
+                verbose,
                 preserve_permissions,
                 force,
                 allow_existing,
@@ -780,14 +687,12 @@ fn execute() -> Result<(), String> {
         }
         Some(Commands::Verify {
             quick,
-            target_time: v_target_time,
-            verbose: v_verbose,
             dest: v_dest,
         }) => {
             let verify_opts = VerifyOptions {
                 quick: quick || cfg.as_ref().and_then(|c| c.quick).unwrap_or(false),
-                verbose: v_verbose || verbose,
-                target_time: v_target_time.or_else(|| target_time.clone()),
+                verbose,
+                target_time,
             };
             let effective_dest = v_dest
                 .or_else(|| cli.dest.clone())

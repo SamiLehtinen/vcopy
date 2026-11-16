@@ -1874,3 +1874,157 @@ fn test_stale_pid_lock_recovery() {
         .success());
     assert!(ctx.dst.join("doc.txt").is_file());
 }
+
+#[test]
+fn test_command_and_parameter_suggestions() {
+    let ctx = TestContext::new("cli_suggestions");
+    ctx.write_src_file("a.txt", b"hello");
+
+    // 1. Misspelled subcommand
+    let out_prun = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .current_dir(&ctx.dir)
+        .arg("prun")
+        .arg(&ctx.dst)
+        .output()
+        .unwrap();
+    assert!(!out_prun.status.success());
+    let stderr_prun = String::from_utf8_lossy(&out_prun.stderr);
+    assert!(
+        stderr_prun.contains("Did you mean 'vcopy prune'"),
+        "Expected prune suggestion, got: {}",
+        stderr_prun
+    );
+
+    // 2. Single-arg misspelled subcommand (e.g. manul)
+    let out_manul = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .current_dir(&ctx.dir)
+        .arg("manul")
+        .output()
+        .unwrap();
+    assert!(!out_manul.status.success());
+    let stderr_manul = String::from_utf8_lossy(&out_manul.stderr);
+    assert!(
+        stderr_manul.contains("Did you mean 'vcopy manual'"),
+        "Expected manual suggestion, got: {}",
+        stderr_manul
+    );
+
+    // 3. Existing directory named "prun" in CWD must still be backed up normally
+    let prun_dir = ctx.dir.join("prun");
+    fs::create_dir_all(&prun_dir).unwrap();
+    fs::write(prun_dir.join("real.txt"), b"real data").unwrap();
+    let prun_dst = ctx.dir.join("prun_dst");
+    fs::create_dir_all(&prun_dst).unwrap();
+    let st_real = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .current_dir(&ctx.dir)
+        .arg("prun")
+        .arg(&prun_dst)
+        .status()
+        .unwrap();
+    assert!(st_real.success());
+    assert!(prun_dst.join("real.txt").is_file());
+
+    // 4. Trailing flag typo after positional paths
+    let out_trailing_flag = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .arg("--kepe-daily")
+        .arg("7")
+        .output()
+        .unwrap();
+    assert!(!out_trailing_flag.status.success());
+    let stderr_trailing = String::from_utf8_lossy(&out_trailing_flag.stderr);
+    assert!(
+        stderr_trailing.contains("--keep-daily"),
+        "Expected --keep-daily suggestion, got: {}",
+        stderr_trailing
+    );
+
+    // 5. Subcommand passed as a flag (--prune)
+    let out_subcmd_flag = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--prune")
+        .arg(&ctx.dst)
+        .output()
+        .unwrap();
+    assert!(!out_subcmd_flag.status.success());
+    let stderr_subcmd_flag = String::from_utf8_lossy(&out_subcmd_flag.stderr);
+    assert!(
+        stderr_subcmd_flag.contains("'prune' is a subcommand"),
+        "Expected subcommand tip for --prune, got: {}",
+        stderr_subcmd_flag
+    );
+
+    // 6. Invalid command in config file
+    let bad_cmd_cfg = ctx.dir.join("bad_cmd.toml");
+    fs::write(
+        &bad_cmd_cfg,
+        format!("command = \"prun\"\ndest = '{}'\n", ctx.dst.display()),
+    )
+    .unwrap();
+    let out_cfg_cmd = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("-c")
+        .arg(&bad_cmd_cfg)
+        .output()
+        .unwrap();
+    assert!(!out_cfg_cmd.status.success());
+    let stderr_cfg_cmd = String::from_utf8_lossy(&out_cfg_cmd.stderr);
+    assert!(
+        stderr_cfg_cmd.contains("Did you mean 'prune'"),
+        "Expected prune suggestion in config error, got: {}",
+        stderr_cfg_cmd
+    );
+
+    // 7. Unknown option in TOML and JSON config files
+    let bad_toml_cfg = ctx.dir.join("bad_opt.toml");
+    fs::write(
+        &bad_toml_cfg,
+        format!("dest = '{}'\nkepe-daily = 7\n", ctx.dst.display()),
+    )
+    .unwrap();
+    let out_bad_toml = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("-c")
+        .arg(&bad_toml_cfg)
+        .output()
+        .unwrap();
+    assert!(!out_bad_toml.status.success());
+    let stderr_bad_toml = String::from_utf8_lossy(&out_bad_toml.stderr);
+    assert!(
+        stderr_bad_toml.contains("Did you mean 'keep-daily'"),
+        "Expected keep-daily suggestion in TOML config error, got: {}",
+        stderr_bad_toml
+    );
+
+    let bad_json_cfg = ctx.dir.join("bad_opt.json");
+    fs::write(&bad_json_cfg, r#"{"kepe-daily": 7}"#).unwrap();
+    let out_bad_json = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("-c")
+        .arg(&bad_json_cfg)
+        .output()
+        .unwrap();
+    assert!(!out_bad_json.status.success());
+    let stderr_bad_json = String::from_utf8_lossy(&out_bad_json.stderr);
+    assert!(
+        stderr_bad_json.contains("Did you mean 'keep-daily'"),
+        "Expected keep-daily suggestion in JSON config error, got: {}",
+        stderr_bad_json
+    );
+
+    // 8. Global flags work after subcommand positional paths (create --dry-run, auto --keep-daily)
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("create")
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .arg("--dry-run")
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("auto")
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .arg("--keep-daily")
+        .arg("7")
+        .status()
+        .unwrap()
+        .success());
+}

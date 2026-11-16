@@ -906,6 +906,86 @@ pub fn format_size_compact(bytes: u64) -> String {
     format!("{:.1} {}", val, UNITS[unit_idx])
 }
 
+/// Optimal string alignment (restricted Damerau-Levenshtein) distance.
+/// Counts insertions, deletions, substitutions, and adjacent transpositions as cost 1.
+pub fn damerau_levenshtein(a: &str, b: &str) -> usize {
+    let a_chars: Vec<char> = a.chars().collect();
+    let b_chars: Vec<char> = b.chars().collect();
+    let m = a_chars.len();
+    let n = b_chars.len();
+
+    if m == 0 {
+        return n;
+    }
+    if n == 0 {
+        return m;
+    }
+
+    let mut d = vec![vec![0usize; n + 1]; m + 1];
+    for (i, row) in d.iter_mut().enumerate() {
+        row[0] = i;
+    }
+    for (j, cell) in d[0].iter_mut().enumerate() {
+        *cell = j;
+    }
+
+    for i in 1..=m {
+        for j in 1..=n {
+            let cost = usize::from(a_chars[i - 1] != b_chars[j - 1]);
+            let mut best = (d[i - 1][j] + 1)
+                .min(d[i][j - 1] + 1)
+                .min(d[i - 1][j - 1] + cost);
+            if i > 1
+                && j > 1
+                && a_chars[i - 1] == b_chars[j - 2]
+                && a_chars[i - 2] == b_chars[j - 1]
+            {
+                best = best.min(d[i - 2][j - 2] + 1);
+            }
+            d[i][j] = best;
+        }
+    }
+
+    d[m][n]
+}
+
+/// Return the closest matching candidate from `candidates` for `input` if within a
+/// conservative typo threshold, or `None` if no candidate is sufficiently close.
+pub fn suggest_closest<'a>(input: &str, candidates: &[&'a str]) -> Option<&'a str> {
+    let input_lower = input.to_ascii_lowercase();
+    if input_lower.len() < 2 {
+        return None;
+    }
+
+    let mut best: Option<(&'a str, usize, bool)> = None;
+    for &cand in candidates {
+        let cand_lower = cand.to_ascii_lowercase();
+        let dist = damerau_levenshtein(&input_lower, &cand_lower);
+        let max_dist = if cand_lower.len() <= 3 {
+            1
+        } else if cand_lower.len() <= 8 {
+            2
+        } else {
+            3
+        };
+        let is_prefix = input_lower.len() >= 3 && cand_lower.starts_with(&input_lower);
+
+        if dist <= max_dist || is_prefix {
+            let replace = match best {
+                None => true,
+                Some((_, best_dist, best_prefix)) => {
+                    dist < best_dist || (dist == best_dist && is_prefix && !best_prefix)
+                }
+            };
+            if replace {
+                best = Some((cand, dist, is_prefix));
+            }
+        }
+    }
+
+    best.map(|(cand, _, _)| cand)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -972,5 +1052,31 @@ mod tests {
             parse_version_filename(".version-history.baseline.json"),
             None
         );
+    }
+
+    #[test]
+    fn test_damerau_levenshtein_and_suggest_closest() {
+        assert_eq!(damerau_levenshtein("prune", "prune"), 0);
+        assert_eq!(damerau_levenshtein("prun", "prune"), 1);
+        assert_eq!(damerau_levenshtein("lsit", "list"), 1);
+        assert_eq!(damerau_levenshtein("maunl", "manual"), 2);
+
+        let subcommands = [
+            "auto", "create", "prune", "restore", "list", "ls", "verify", "check", "manual", "man",
+        ];
+        assert_eq!(suggest_closest("prun", &subcommands), Some("prune"));
+        assert_eq!(suggest_closest("restor", &subcommands), Some("restore"));
+        assert_eq!(suggest_closest("lsit", &subcommands), Some("list"));
+        assert_eq!(suggest_closest("chek", &subcommands), Some("check"));
+        assert_eq!(suggest_closest("manul", &subcommands), Some("manual"));
+        assert_eq!(suggest_closest("sl", &subcommands), Some("ls"));
+        assert_eq!(suggest_closest("ver", &subcommands), Some("verify"));
+        assert_eq!(suggest_closest("l", &subcommands), None);
+        assert_eq!(suggest_closest("my_photos", &subcommands), None);
+
+        let flags = ["keep-daily", "keep-hourly", "dry-run", "no-defaults"];
+        assert_eq!(suggest_closest("kepe-daily", &flags), Some("keep-daily"));
+        assert_eq!(suggest_closest("dryrun", &flags), Some("dry-run"));
+        assert_eq!(suggest_closest("no-default", &flags), Some("no-defaults"));
     }
 }

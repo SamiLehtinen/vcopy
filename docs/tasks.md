@@ -62,6 +62,12 @@
 - [x] Ensure `-0` is parsed as a short boolean flag (`short = '0'`) without conflicting with numeric values or paths.
 - [x] Document `-0, --no-defaults` in `--help`, embedded manual (`docs/MANUAL.md`), `docs/vcopy.1`, `docs/spec.md`, and `README.md`.
 
+## 8. Command & Parameter Suggestions (`Did you mean ...?`)
+- [x] Add pure-Rust Damerau-Levenshtein edit-distance suggestion helper (`damerau_levenshtein` and `suggest_closest` in `src/util.rs`).
+- [x] Suggest closest subcommand when a non-existent bare token resembles a subcommand (e.g. `vcopy prun /dest` -> `Did you mean 'vcopy prune'?`), without intercepting real directories/files.
+- [x] Validate flags placed after positional paths across all commands (`auto`, `create`, default) and hint when a subcommand is passed as a flag (e.g. `vcopy --prune`).
+- [x] Reject unknown configuration options and invalid `command` entries across CLI-format, key-value, TOML, and JSON config files with `"Did you mean ...?"` suggestions.
+
 ---
 
 ## Previously Completed
