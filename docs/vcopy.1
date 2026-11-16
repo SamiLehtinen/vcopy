@@ -1,4 +1,4 @@
-.TH VCOPY 1 "November 2026" "vcopy 0.3.0" "User Commands"
+.TH VCOPY 1 "November 2026" "vcopy 0.3.1" "User Commands"
 .SH NAME
 vcopy \- directly browseable, zero-link, multi-platform backup and sync tool with historical versioning
 .SH SYNOPSIS
@@ -140,6 +140,9 @@ $ vcopy prune -n 5 /mnt/usb/backup
 # Retain 24 hourly, 7 daily, 4 weekly, 12 monthly, 1 yearly
 $ vcopy prune --hourly 24 --daily 7 --weekly 4 /mnt/usb/backup
 
+# Retain ONLY 7 daily snapshots (zeroing out unspecified retention buckets)
+$ vcopy prune -0 --daily 7 /mnt/usb/backup
+
 # Dry run: preview actions without modifying files
 $ vcopy prune -n 5 --dry-run -v /mnt/usb/backup
 .fi
@@ -224,6 +227,9 @@ Number of monthly snapshot buckets to retain (default: 12).
 .TP
 .BR \-\-keep-yearly ", " \-\-yearly " " \fIN\fR
 Number of yearly snapshot buckets to retain (default: 1).
+.TP
+.BR \-0 ", " \-\-no-defaults ", " \-\-zero-defaults ", " \-\-no-keep-defaults
+Default any unspecified \fB\-\-keep-*\fR retention bucket to 0 instead of its standard default.
 .SH SUBCOMMANDS
 .TP
 .B auto

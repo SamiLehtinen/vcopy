@@ -201,6 +201,9 @@ vcopy prune -n 5 /mnt/usb/backup
 # Retain 24 hourly, 7 daily, 4 weekly, 12 monthly, and 1 yearly snapshots
 vcopy prune --hourly 24 --daily 7 --weekly 4 /mnt/usb/backup
 
+# Retain ONLY 7 daily snapshots (zeroing out unspecified hourly/weekly/monthly/yearly defaults)
+vcopy prune -0 --daily 7 /mnt/usb/backup
+
 # Dry run: preview which snapshots would be deleted without modifying disk
 vcopy prune -n 5 --dry-run -v /mnt/usb/backup
 ```
@@ -244,6 +247,7 @@ vcopy prune -n 5 --dry-run -v /mnt/usb/backup
 | `--keep-weekly` | `--weekly` | 4 | Number of weekly snapshot buckets to retain. |
 | `--keep-monthly` | `--monthly` | 12 | Number of monthly snapshot buckets to retain. |
 | `--keep-yearly` | `--yearly` | 1 | Number of yearly snapshot buckets to retain. |
+| `--no-defaults` | `-0`, `--zero-defaults`, `--no-keep-defaults` | `false` | Default any unspecified `--keep-*` retention bucket to `0` instead of its standard default. |
 
 ---
 

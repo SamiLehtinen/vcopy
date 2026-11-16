@@ -56,6 +56,12 @@
   - `--allow-missing-source`
 - [x] Add the 100% Wipeout Circuit Breaker and Protected Directory Guards to the "Technical Invariants & Safety Guarantees" sections in all documentation.
 
+## 7. Zero-Default Retention Flag (`-0, --no-defaults`)
+- [x] Add boolean CLI and config option `-0, --no-defaults` with aliases `--zero-defaults` and `--no-keep-defaults` (and `no-defaults`, `zero-defaults`, `no-keep-defaults` in key-value, TOML, and JSON configs).
+- [x] Default unspecified `--keep-*` retention buckets to `0` when `-0` / `--no-defaults` is enabled, while preserving standard defaults (`24` hourly, `7` daily, `4` weekly, `12` monthly, `1` yearly) otherwise.
+- [x] Ensure `-0` is parsed as a short boolean flag (`short = '0'`) without conflicting with numeric values or paths.
+- [x] Document `-0, --no-defaults` in `--help`, embedded manual (`docs/MANUAL.md`), `docs/vcopy.1`, `docs/spec.md`, and `README.md`.
+
 ---
 
 ## Previously Completed

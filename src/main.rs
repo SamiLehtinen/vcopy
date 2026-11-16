@@ -28,7 +28,7 @@ use verify::{run_verify, VerifyOptions};
 #[command(
     name = "vcopy",
     author = "Sami Lehtinen",
-    version = "0.3.0",
+    version = "0.3.1",
     about = "Browseable zero-link backup tool with history",
     long_about = "vcopy creates directly browseable, uncompressed filesystem mirrors on external drives and non-snapshotting filesystems (exFAT, FAT32, NTFS, ext4, APFS) while preserving a full historical change record in .version-history/.",
     subcommand_precedence_over_arg = true
@@ -128,6 +128,17 @@ struct Cli {
         value_name = "N"
     )]
     keep_yearly: Option<usize>,
+
+    /// Default unspecified --keep-* retention buckets to 0 instead of their standard defaults
+    #[arg(
+        short = '0',
+        long = "no-defaults",
+        alias = "zero-defaults",
+        visible_alias = "zero-defaults",
+        alias = "no-keep-defaults",
+        visible_alias = "no-keep-defaults"
+    )]
+    no_defaults: bool,
 
     /// Perform a trial run without making any filesystem modifications
     #[arg(long = "dry-run")]
@@ -285,6 +296,17 @@ enum Commands {
             value_name = "N"
         )]
         keep_yearly: Option<usize>,
+
+        /// Default unspecified --keep-* retention buckets to 0 instead of their standard defaults
+        #[arg(
+            short = '0',
+            long = "no-defaults",
+            alias = "zero-defaults",
+            visible_alias = "zero-defaults",
+            alias = "no-keep-defaults",
+            visible_alias = "no-keep-defaults"
+        )]
+        no_defaults: bool,
 
         /// Simulate pruning without deleting snapshot directories
         #[arg(long = "dry-run")]
@@ -499,29 +521,48 @@ fn execute() -> Result<(), String> {
             .and_then(|c| c.preserve_permissions)
             .unwrap_or(false);
 
+    let no_defaults = cli.no_defaults || cfg.as_ref().and_then(|c| c.no_defaults).unwrap_or(false);
+
     let max_versions = cli
         .max_versions
         .or_else(|| cfg.as_ref().and_then(|c| c.max_versions));
-    let keep_hourly = cli
+    let keep_hourly_opt = cli
         .keep_hourly
-        .or_else(|| cfg.as_ref().and_then(|c| c.keep_hourly))
-        .unwrap_or(24);
-    let keep_daily = cli
+        .or_else(|| cfg.as_ref().and_then(|c| c.keep_hourly));
+    let keep_daily_opt = cli
         .keep_daily
-        .or_else(|| cfg.as_ref().and_then(|c| c.keep_daily))
-        .unwrap_or(7);
-    let keep_weekly = cli
+        .or_else(|| cfg.as_ref().and_then(|c| c.keep_daily));
+    let keep_weekly_opt = cli
         .keep_weekly
-        .or_else(|| cfg.as_ref().and_then(|c| c.keep_weekly))
-        .unwrap_or(4);
-    let keep_monthly = cli
+        .or_else(|| cfg.as_ref().and_then(|c| c.keep_weekly));
+    let keep_monthly_opt = cli
         .keep_monthly
-        .or_else(|| cfg.as_ref().and_then(|c| c.keep_monthly))
-        .unwrap_or(12);
-    let keep_yearly = cli
+        .or_else(|| cfg.as_ref().and_then(|c| c.keep_monthly));
+    let keep_yearly_opt = cli
         .keep_yearly
-        .or_else(|| cfg.as_ref().and_then(|c| c.keep_yearly))
-        .unwrap_or(1);
+        .or_else(|| cfg.as_ref().and_then(|c| c.keep_yearly));
+
+    let resolve_prune_opts = |nd: bool,
+                              p_max: Option<usize>,
+                              p_h: Option<usize>,
+                              p_d: Option<usize>,
+                              p_w: Option<usize>,
+                              p_m: Option<usize>,
+                              p_y: Option<usize>,
+                              p_dry: bool,
+                              p_verb: bool|
+     -> PruneOptions {
+        PruneOptions {
+            max_versions: p_max.or(max_versions),
+            keep_hourly: p_h.or(keep_hourly_opt).unwrap_or(if nd { 0 } else { 24 }),
+            keep_daily: p_d.or(keep_daily_opt).unwrap_or(if nd { 0 } else { 7 }),
+            keep_weekly: p_w.or(keep_weekly_opt).unwrap_or(if nd { 0 } else { 4 }),
+            keep_monthly: p_m.or(keep_monthly_opt).unwrap_or(if nd { 0 } else { 12 }),
+            keep_yearly: p_y.or(keep_yearly_opt).unwrap_or(if nd { 0 } else { 1 }),
+            dry_run: p_dry || dry_run,
+            verbose: p_verb || verbose,
+        }
+    };
     let target_time = cli
         .target_time
         .or_else(|| cfg.as_ref().and_then(|c| c.target_time.clone()));
@@ -567,16 +608,17 @@ fn execute() -> Result<(), String> {
         exclude_filter,
     };
 
-    let prune_opts = PruneOptions {
-        max_versions,
-        keep_hourly,
-        keep_daily,
-        keep_weekly,
-        keep_monthly,
-        keep_yearly,
-        dry_run,
-        verbose,
-    };
+    let prune_opts = resolve_prune_opts(
+        no_defaults,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        false,
+        false,
+    );
 
     let effective_command = cli.command.or_else(|| {
         cfg.as_ref()
@@ -589,6 +631,7 @@ fn execute() -> Result<(), String> {
                     keep_weekly: None,
                     keep_monthly: None,
                     keep_yearly: None,
+                    no_defaults: false,
                     dry_run: false,
                     verbose: false,
                     dest: None,
@@ -666,20 +709,22 @@ fn execute() -> Result<(), String> {
             keep_weekly: p_keep_weekly,
             keep_monthly: p_keep_monthly,
             keep_yearly: p_keep_yearly,
+            no_defaults: p_no_defaults,
             dry_run: p_dry_run,
             verbose: p_verbose,
             dest: p_dest,
         }) => {
-            let specific_prune_opts = PruneOptions {
-                max_versions: p_max_versions.or(max_versions),
-                keep_hourly: p_keep_hourly.unwrap_or(keep_hourly),
-                keep_daily: p_keep_daily.unwrap_or(keep_daily),
-                keep_weekly: p_keep_weekly.unwrap_or(keep_weekly),
-                keep_monthly: p_keep_monthly.unwrap_or(keep_monthly),
-                keep_yearly: p_keep_yearly.unwrap_or(keep_yearly),
-                dry_run: p_dry_run || dry_run,
-                verbose: p_verbose || verbose,
-            };
+            let specific_prune_opts = resolve_prune_opts(
+                p_no_defaults || no_defaults,
+                p_max_versions,
+                p_keep_hourly,
+                p_keep_daily,
+                p_keep_weekly,
+                p_keep_monthly,
+                p_keep_yearly,
+                p_dry_run,
+                p_verbose,
+            );
             let effective_dest = p_dest
                 .or_else(|| cli.dest.clone())
                 .or_else(|| cfg.as_ref().and_then(|c| c.dest.clone()))

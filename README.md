@@ -200,6 +200,9 @@ vcopy prune -n 5 /mnt/usb/backup
 # Retain 24 hourly, 7 daily, 4 weekly, 12 monthly, and 1 yearly snapshots
 vcopy prune --hourly 24 --daily 7 --weekly 4 /mnt/usb/backup
 
+# Retain ONLY 7 daily snapshots (zeroing out unspecified hourly/weekly/monthly/yearly defaults)
+vcopy prune -0 --daily 7 /mnt/usb/backup
+
 # Preview pruning actions without deleting files (dry run)
 vcopy prune -n 5 --dry-run -v /mnt/usb/backup
 ```
@@ -247,6 +250,7 @@ vcopy [OPTIONS] [SOURCES... DEST]... [COMMAND]
 | `--keep-weekly` | `--weekly` | 4 | Retain one snapshot per week for the past $N$ weeks. |
 | `--keep-monthly` | `--monthly` | 12 | Retain one snapshot per month for the past $N$ months. |
 | `--keep-yearly` | `--yearly` | 1 | Retain one snapshot per year for the past $N$ years. |
+| `--no-defaults` | `-0`, `--zero-defaults`, `--no-keep-defaults` | `false` | Default any unspecified `--keep-*` retention bucket to `0` instead of its standard default. |
 
 ---
 
@@ -458,7 +462,7 @@ Ideal when you need all files in a single flat folder (e.g. flat USB drives, pho
 
 ## Installation & Pre-Built Binaries
 
-Pre-compiled standalone static binaries for release `v0.3.0` are available on the [GitHub Releases](https://github.com/samilehtinen/vcopy/releases) page:
+Pre-compiled standalone static binaries for release `v0.3.1` are available on the [GitHub Releases](https://github.com/samilehtinen/vcopy/releases) page:
 
 | Platform | Architecture | Target Triple | Binary Name |
 | :--- | :--- | :--- | :--- |

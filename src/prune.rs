@@ -66,9 +66,15 @@ pub fn run_prune(opts: &PruneOptions, dest: &Path) -> io::Result<()> {
             to_keep.insert(s.name.clone());
         }
     } else {
-        // Invariant in GFS mode: always keep the most recent historical snapshot
-        if let Some(first) = snapshots.first() {
-            to_keep.insert(first.name.clone());
+        let has_any_bucket = opts.keep_hourly > 0
+            || opts.keep_daily > 0
+            || opts.keep_weekly > 0
+            || opts.keep_monthly > 0
+            || opts.keep_yearly > 0;
+        if has_any_bucket {
+            if let Some(first) = snapshots.first() {
+                to_keep.insert(first.name.clone());
+            }
         }
 
         // Smart GFS retention
@@ -243,8 +249,15 @@ fn run_prune_flat(opts: &PruneOptions, dest: &Path) -> io::Result<()> {
             to_keep.insert(name.clone());
         }
     } else {
-        if let Some(first) = snap_names.first() {
-            to_keep.insert(first.clone());
+        let has_any_bucket = opts.keep_hourly > 0
+            || opts.keep_daily > 0
+            || opts.keep_weekly > 0
+            || opts.keep_monthly > 0
+            || opts.keep_yearly > 0;
+        if has_any_bucket {
+            if let Some(first) = snap_names.first() {
+                to_keep.insert(first.clone());
+            }
         }
 
         let mut hourly_buckets: HashSet<String> = HashSet::new();

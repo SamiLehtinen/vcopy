@@ -421,3 +421,90 @@ fn test_gfs_multi_tier_buckets_and_dry_run() {
     assert!(hist_dir.join("2025-02-10_120000").is_dir());
     assert!(hist_dir.join("2024-05-01_120000").is_dir());
 }
+
+#[test]
+fn test_no_defaults_flag_and_aliases() {
+    let ctx = TestContext::new("no_defaults_flag");
+    let hist_dir = ctx.dst.join(".version-history");
+    fs::create_dir_all(&hist_dir).unwrap();
+
+    // Create synthetic snapshots across multiple days, weeks, months, years:
+    // Without -0, --keep-hourly 1 would still keep 7 daily, 4 weekly, 12 monthly, 1 yearly.
+    // With -0, unspecified tiers default to 0, so only the newest snapshot + 1 hourly bucket survive.
+    let synthetic_snaps = [
+        "2025-06-20_104500",
+        "2025-06-20_093000",
+        "2025-06-18_120000", // older day
+        "2025-06-02_120000", // older week
+        "2025-02-10_120000", // older month
+        "2024-05-01_120000", // older year
+    ];
+    for snap in &synthetic_snaps {
+        let sdir = hist_dir.join(snap);
+        fs::create_dir_all(&sdir).unwrap();
+        let m = format!(
+            "{{\"timestamp\":\"{}\",\"files\":{{}},\"deleted\":[]}}",
+            snap
+        );
+        fs::write(sdir.join("manifest.json"), m).unwrap();
+    }
+
+    // Prune using `-0 --keep-hourly 1` (hourly=1 keeps 2025-06-20_104500; all other buckets=0)
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("prune")
+        .arg("-0")
+        .arg("--keep-hourly")
+        .arg("1")
+        .arg(&ctx.dst)
+        .status()
+        .unwrap()
+        .success());
+
+    assert!(hist_dir.join("2025-06-20_104500").is_dir());
+    for pruned in &synthetic_snaps[1..] {
+        assert!(
+            !hist_dir.join(pruned).exists(),
+            "Expected {} to be pruned when -0 zeroes unspecified defaults",
+            pruned
+        );
+    }
+
+    // Prune using `-0` alone (all buckets = 0): must prune all remaining historical snapshots (0 kept)
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("prune")
+        .arg("-0")
+        .arg(&ctx.dst)
+        .status()
+        .unwrap()
+        .success());
+    assert!(
+        !hist_dir.join("2025-06-20_104500").exists(),
+        "Expected 0 historical snapshots kept when all GFS buckets are 0"
+    );
+
+    // Verify aliases --zero-defaults and --no-keep-defaults also work with numeric args & path named '0'
+    let src_zero = ctx.src.join("0");
+    fs::create_dir_all(&src_zero).unwrap();
+    fs::write(src_zero.join("file.txt"), "hello").unwrap();
+    for flag in [
+        "-0",
+        "--no-defaults",
+        "--zero-defaults",
+        "--no-keep-defaults",
+    ] {
+        assert!(
+            Command::new(env!("CARGO_BIN_EXE_vcopy"))
+                .arg(flag)
+                .arg("--daily")
+                .arg("0")
+                .arg(&src_zero)
+                .arg(&ctx.dst)
+                .status()
+                .unwrap()
+                .success(),
+            "Failed with flag {}",
+            flag
+        );
+    }
+    assert!(ctx.dst.join("file.txt").is_file());
+}

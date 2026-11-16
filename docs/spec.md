@@ -1,6 +1,6 @@
 # Engineering Specification: `vcopy`
 
-**Version:** 0.3.0  
+**Version:** 0.3.1  
 **Author:** Sami Lehtinen  
 **License:** 0BSD  
 
@@ -283,6 +283,7 @@ Options:
       --keep-weekly <N>          Weekly retention count (default: 4) (alias: --weekly)
       --keep-monthly <N>         Monthly retention count (default: 12) (alias: --monthly)
       --keep-yearly <N>          Yearly retention count (default: 1) (alias: --yearly)
+  -0, --no-defaults              Default unspecified --keep-* retention buckets to 0 (aliases: --zero-defaults, --no-keep-defaults)
       --dry-run                  Simulate actions without writing or deleting files
   -v, --verbose                  Enable detailed execution logging
       --manual                   Display the comprehensive user manual in plain text / ASCII man-page format
@@ -343,7 +344,7 @@ Precedence: CLI command-line flags and positional arguments always override sett
 
 ## 6. Test Suite & Verification
 
-The automated test suite consists of 44 tests covering core functionality, edge cases, and safety invariants:
+The automated test suite consists of 56 tests covering core functionality, edge cases, and safety invariants:
 
 * `tests/integration_tests.rs`:
   * `test_basic_backup_and_versioning`: Verifies initial mirror sync, subsequent modifications, and historical archiving.
@@ -369,18 +370,24 @@ The automated test suite consists of 44 tests covering core functionality, edge 
   * `test_exclude_system`: Verifies `-e / --exclude`, `--exclude-from`, and `.vcopyignore` ignore filtering and manifest recording.
   * `test_verify_and_bit_rot_detection`: Verifies `vcopy verify` and `vcopy check` bit-rot detection, `--quick` mode, missing files, and non-zero exit codes.
   * `test_flat_date_naming_and_orphan_recovery`: Verifies `--flat-date` naming format and orphan scan recovery with timestamps.
+  * `test_orphan_scan_recovery_hierarchical_mode` & `test_orphan_scan_recovery_flat_mode`: Verifies manifest-less orphan scan recovery.
+  * `test_total_wipeout_circuit_breaker`, `test_missing_source_path_protection`, & `test_destination_safety_guards`: Verifies safety circuit breakers and protected directory guards.
+  * `test_shorter_cli_flags_and_aliases`, `test_stale_pid_lock_recovery`, `test_self_healing_missing_destination_file`, & `test_nested_vcopyignore_and_config_subcommands`: Verifies CLI aliases, lock recovery, self-healing mirror sync, and nested `.vcopyignore`.
 * `tests/prune_tests.rs`:
   * `test_count_based_pruning`: Verifies `-n <N>` snapshot pruning.
   * `test_prune_preserves_older_snapshot_restore`: Verifies reverse-delta consolidation when intermediate snapshots are pruned.
   * `test_flat_pruning_and_consolidation`: Verifies version consolidation and pruning in `--flatten` mode.
   * `test_prune_ignores_non_snapshot_dirs_and_symlinks`: Verifies pruning safety rules on non-snapshot directories.
+  * `test_gfs_multi_tier_buckets_and_dry_run`: Verifies multi-tier GFS bucket evaluation and `--dry-run` safety.
+  * `test_no_defaults_flag_and_aliases`: Verifies `-0, --no-defaults` (`--zero-defaults`, `--no-keep-defaults`) zeroing unspecified GFS retention buckets and path/numeric safety.
 * `tests/restore_tests.rs`:
   * `test_point_in_time_restore`: Verifies exact historical point-in-time file recovery and timestamp preservation.
   * `test_multi_snapshot_restore_with_later_deletions_and_modifications`: Verifies multi-stage modification and deletion recovery.
   * `test_restore_latest`: Verifies restore of current live mirror.
   * `test_restore_permissions_option`: Verifies mode permission preservation and restoration when `-p` is enabled.
   * `test_partial_and_single_path_restore`: Verifies single-file restore, subtree restore, and wildcard glob filtering in hierarchical and flat modes.
-* Unit tests in `src/exclude.rs`, `src/restore.rs`, and `src/util.rs`:
-  * Pattern matching, directory exclusions, comments, negation parsing.
-  * Restore filter wildcards, exact prefix matching.
-  * Timestamp parsing, monotonic version parsing, and human-readable byte sizing.
+  * `test_restore_heuristic_scan_recovery_when_file_moved` & `test_restore_timestamp_prefix_and_safety_guards`: Verifies heuristic file recovery and timestamp prefix matching.
+* Unit tests in `src/config.rs`, `src/exclude.rs`, `src/lock.rs`, `src/manual.rs`, `src/restore.rs`, and `src/util.rs`:
+  * Config key-value/TOML/JSON parsing, Windows paths, and `-0, --no-defaults` aliases.
+  * Pattern matching, directory exclusions, comments, and nested prefix handling.
+  * PID lock stale recovery, ASCII manual rendering, restore filter wildcards, and human-readable byte sizing.

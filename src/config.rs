@@ -127,6 +127,21 @@ pub struct ConfigFile {
     )]
     pub keep_yearly: Option<usize>,
 
+    #[serde(
+        default,
+        alias = "no-defaults",
+        alias = "no_defaults",
+        alias = "zero-defaults",
+        alias = "zero_defaults",
+        alias = "no-keep-defaults",
+        alias = "no_keep_defaults",
+        alias = "--no-defaults",
+        alias = "--zero-defaults",
+        alias = "--no-keep-defaults",
+        alias = "-0"
+    )]
+    pub no_defaults: Option<bool>,
+
     #[serde(default, alias = "dry-run", alias = "dry_run", alias = "--dry-run")]
     pub dry_run: Option<bool>,
 
@@ -650,6 +665,27 @@ pub fn parse_cli_or_keyval_config(content: &str) -> Result<ConfigFile, String> {
                         .map_err(|e| format!("Invalid keep-yearly '{}': {}", v, e))?,
                 );
             }
+            "no-defaults" | "no_defaults" | "zero-defaults" | "zero_defaults"
+            | "no-keep-defaults" | "no_keep_defaults" | "0"
+                if norm_key != "0" || tok.starts_with('-') =>
+            {
+                if let Some(v) = inline_val {
+                    cfg.no_defaults = Some(v.parse::<bool>().unwrap_or(true));
+                } else if i + 1 < raw_tokens.len()
+                    && (raw_tokens[i + 1] == "true" || raw_tokens[i + 1] == "false")
+                {
+                    i += 1;
+                    cfg.no_defaults = Some(raw_tokens[i] == "true");
+                } else if i + 2 < raw_tokens.len()
+                    && raw_tokens[i + 1] == "="
+                    && (raw_tokens[i + 2] == "true" || raw_tokens[i + 2] == "false")
+                {
+                    i += 2;
+                    cfg.no_defaults = Some(raw_tokens[i] == "true");
+                } else {
+                    cfg.no_defaults = Some(true);
+                }
+            }
             "target-time" | "target_time" | "time" | "t" | "snapshot" => {
                 let v = get_val(&mut i, inline_val)?;
                 cfg.target_time = Some(v);
@@ -796,5 +832,45 @@ sources = D:\Data\Backup
                 PathBuf::from(r"D:\Data\Backup"),
             ]
         );
+    }
+
+    #[test]
+    fn test_no_defaults_config_aliases_and_path_safety() {
+        for key in [
+            "no-defaults = true",
+            "zero-defaults = true",
+            "no-keep-defaults = true",
+            "-0",
+            "--no-defaults",
+            "--zero-defaults",
+            "--no-keep-defaults",
+        ] {
+            let cfg = parse_cli_or_keyval_config(key).unwrap();
+            assert_eq!(cfg.no_defaults, Some(true), "Failed for key: {}", key);
+        }
+
+        for toml_str in [
+            "no-defaults = true",
+            "zero-defaults = true",
+            "no-keep-defaults = true",
+        ] {
+            let cfg: ConfigFile = toml::from_str(toml_str).unwrap();
+            assert_eq!(cfg.no_defaults, Some(true), "TOML failed: {}", toml_str);
+        }
+
+        for json_str in [
+            r#"{"no-defaults": true}"#,
+            r#"{"zero-defaults": true}"#,
+            r#"{"no-keep-defaults": true}"#,
+        ] {
+            let cfg: ConfigFile = serde_json::from_str(json_str).unwrap();
+            assert_eq!(cfg.no_defaults, Some(true), "JSON failed: {}", json_str);
+        }
+
+        // Bare "0" positional path must not trigger -0 flag
+        let cfg = parse_cli_or_keyval_config("0 /tmp/dest").unwrap();
+        assert_eq!(cfg.no_defaults, None);
+        assert_eq!(cfg.get_sources(), vec![PathBuf::from("0")]);
+        assert_eq!(cfg.dest.as_deref(), Some(Path::new("/tmp/dest")));
     }
 }
