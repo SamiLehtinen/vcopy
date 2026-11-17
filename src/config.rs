@@ -83,6 +83,18 @@ pub struct ConfigFile {
 
     #[serde(
         default,
+        alias = "keep-last",
+        alias = "keep_last",
+        alias = "last",
+        alias = "--keep-last",
+        alias = "--last",
+        alias = "-l",
+        alias = "l"
+    )]
+    pub keep_last: Option<usize>,
+
+    #[serde(
+        default,
         alias = "keep-hourly",
         alias = "keep_hourly",
         alias = "hourly",
@@ -431,6 +443,8 @@ const CONFIG_OPTION_CANDIDATES: &[&str] = &[
     "dry-run",
     "verbose",
     "max-versions",
+    "keep-last",
+    "last",
     "keep-hourly",
     "hourly",
     "keep-daily",
@@ -699,6 +713,13 @@ pub fn parse_cli_or_keyval_config(content: &str) -> Result<ConfigFile, String> {
                 cfg.max_versions = Some(
                     v.parse::<usize>()
                         .map_err(|e| format!("Invalid max-versions '{}': {}", v, e))?,
+                );
+            }
+            "keep-last" | "keep_last" | "last" | "l" => {
+                let v = get_val(&mut i, inline_val)?;
+                cfg.keep_last = Some(
+                    v.parse::<usize>()
+                        .map_err(|e| format!("Invalid keep-last '{}': {}", v, e))?,
                 );
             }
             "keep-hourly" | "keep_hourly" | "hourly" => {

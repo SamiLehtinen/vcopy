@@ -1,4 +1,4 @@
-.TH VCOPY 1 "November 2026" "vcopy 0.3.2" "User Commands"
+.TH VCOPY 1 "November 2026" "vcopy 0.3.3" "User Commands"
 .SH NAME
 vcopy \- directly browseable, zero-link, multi-platform backup and sync tool with historical versioning
 .SH SYNOPSIS
@@ -212,6 +212,9 @@ Display the comprehensive user manual in Markdown format.
 .TP
 .BR \-n ", " \-\-max-versions " " \fIN\fR
 Retain only the newest \fIN\fR snapshots (overrides GFS retention).
+.TP
+.BR \-l ", " \-\-keep-last ", " \-\-last " " \fIN\fR
+Always keep the newest \fIN\fR snapshots in addition to GFS retention buckets (default: 0).
 .TP
 .BR \-\-keep-hourly ", " \-\-hourly " " \fIN\fR
 Number of hourly snapshot buckets to retain (default: 24).

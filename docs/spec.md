@@ -1,6 +1,6 @@
 # Engineering Specification: `vcopy`
 
-**Version:** 0.3.2  
+**Version:** 0.3.3  
 **Author:** Sami Lehtinen  
 **License:** 0BSD  
 
@@ -278,6 +278,7 @@ Options:
       --allow-empty-source       Allow empty source without tripping the 100% deletion safety circuit breaker
       --allow-missing-source     Allow missing source paths without aborting the backup run
   -n, --max-versions <N>         Retain only the N newest snapshots (overrides GFS)
+  -l, --keep-last <N>            Always keep the newest N snapshots in addition to GFS buckets (alias: --last)
       --keep-hourly <N>          Hourly retention count (default: 24) (alias: --hourly)
       --keep-daily <N>           Daily retention count (default: 7) (alias: --daily)
       --keep-weekly <N>          Weekly retention count (default: 4) (alias: --weekly)
@@ -348,7 +349,7 @@ Precedence: CLI command-line flags and positional arguments always override sett
 
 ## 6. Test Suite & Verification
 
-The automated test suite consists of 59 tests covering core functionality, edge cases, and safety invariants:
+The automated test suite consists of 60 tests covering core functionality, edge cases, and safety invariants:
 
 * `tests/integration_tests.rs`:
   * `test_basic_backup_and_versioning`: Verifies initial mirror sync, subsequent modifications, and historical archiving.
@@ -385,6 +386,7 @@ The automated test suite consists of 59 tests covering core functionality, edge 
   * `test_prune_ignores_non_snapshot_dirs_and_symlinks`: Verifies pruning safety rules on non-snapshot directories.
   * `test_gfs_multi_tier_buckets_and_dry_run`: Verifies multi-tier GFS bucket evaluation and `--dry-run` safety.
   * `test_no_defaults_flag_and_aliases`: Verifies `-0, --no-defaults` (`--zero-defaults`, `--no-keep-defaults`) zeroing unspecified GFS retention buckets and path/numeric safety.
+  * `test_keep_last_supplements_gfs_and_aliases`: Verifies `-l, --keep-last` (`--last`) supplementing GFS retention buckets and preserving burst snapshots.
 * `tests/restore_tests.rs`:
   * `test_point_in_time_restore`: Verifies exact historical point-in-time file recovery and timestamp preservation.
   * `test_multi_snapshot_restore_with_later_deletions_and_modifications`: Verifies multi-stage modification and deletion recovery.

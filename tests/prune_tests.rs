@@ -508,3 +508,85 @@ fn test_no_defaults_flag_and_aliases() {
     }
     assert!(ctx.dst.join("file.txt").is_file());
 }
+
+#[test]
+fn test_keep_last_supplements_gfs_and_aliases() {
+    let ctx = TestContext::new("keep_last_gfs");
+    let hist_dir = ctx.dst.join(".version-history");
+    fs::create_dir_all(&hist_dir).unwrap();
+
+    // 5 snapshots in the same hour/day, plus 2 older snapshots from previous days/months.
+    // With -0 --daily 2 --keep-last 3:
+    // - --keep-last 3 preserves all 3 newest same-hour snapshots (105000, 104000, 103000)
+    // - --daily 2 preserves 2025-06-20 (already kept) AND 2025-06-18_120000
+    // - 2025-06-20_102000, 2025-06-20_101000, and 2025-02-10_120000 are pruned.
+    let synthetic_snaps = [
+        "2025-06-20_105000",
+        "2025-06-20_104000",
+        "2025-06-20_103000",
+        "2025-06-20_102000",
+        "2025-06-20_101000",
+        "2025-06-18_120000",
+        "2025-02-10_120000",
+    ];
+    for snap in &synthetic_snaps {
+        let sdir = hist_dir.join(snap);
+        fs::create_dir_all(&sdir).unwrap();
+        let m = format!(
+            "{{\"timestamp\":\"{}\",\"files\":{{}},\"deleted\":[]}}",
+            snap
+        );
+        fs::write(sdir.join("manifest.json"), m).unwrap();
+    }
+
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("prune")
+        .arg("-0")
+        .arg("--daily")
+        .arg("2")
+        .arg("--keep-last")
+        .arg("3")
+        .arg(&ctx.dst)
+        .status()
+        .unwrap()
+        .success());
+
+    // Newest 3 + older daily bucket must survive
+    assert!(hist_dir.join("2025-06-20_105000").is_dir());
+    assert!(hist_dir.join("2025-06-20_104000").is_dir());
+    assert!(hist_dir.join("2025-06-20_103000").is_dir());
+    assert!(hist_dir.join("2025-06-18_120000").is_dir());
+
+    // Excess same-hour and out-of-budget older snapshots must be pruned
+    assert!(!hist_dir.join("2025-06-20_102000").exists());
+    assert!(!hist_dir.join("2025-06-20_101000").exists());
+    assert!(!hist_dir.join("2025-02-10_120000").exists());
+
+    // Now test -0 -l 2 (no GFS buckets, only keep-last 2)
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("prune")
+        .arg("-0")
+        .arg("-l")
+        .arg("2")
+        .arg(&ctx.dst)
+        .status()
+        .unwrap()
+        .success());
+    assert!(hist_dir.join("2025-06-20_105000").is_dir());
+    assert!(hist_dir.join("2025-06-20_104000").is_dir());
+    assert!(!hist_dir.join("2025-06-20_103000").exists());
+    assert!(!hist_dir.join("2025-06-18_120000").exists());
+
+    // Verify --last alias works too
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("prune")
+        .arg("-0")
+        .arg("--last")
+        .arg("1")
+        .arg(&ctx.dst)
+        .status()
+        .unwrap()
+        .success());
+    assert!(hist_dir.join("2025-06-20_105000").is_dir());
+    assert!(!hist_dir.join("2025-06-20_104000").exists());
+}

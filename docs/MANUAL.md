@@ -242,6 +242,7 @@ vcopy prune -n 5 --dry-run -v /mnt/usb/backup
 | Option | Shorthand / Aliases | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `--max-versions` | `-n` | None | Retain only the newest $N$ snapshots (overrides GFS schedules). |
+| `--keep-last` | `-l`, `--last` | 0 | Always retain the newest $N$ snapshots in addition to GFS buckets (ideal for irregular/burst backup schedules). |
 | `--keep-hourly` | `--hourly` | 24 | Number of hourly snapshot buckets to retain. |
 | `--keep-daily` | `--daily` | 7 | Number of daily snapshot buckets to retain. |
 | `--keep-weekly` | `--weekly` | 4 | Number of weekly snapshot buckets to retain. |

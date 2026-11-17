@@ -68,6 +68,11 @@
 - [x] Validate flags placed after positional paths across all commands (`auto`, `create`, default) and hint when a subcommand is passed as a flag (e.g. `vcopy --prune`).
 - [x] Reject unknown configuration options and invalid `command` entries across CLI-format, key-value, TOML, and JSON config files with `"Did you mean ...?"` suggestions.
 
+## 9. Keep-Last Retention Supplement (`-l, --keep-last`)
+- [x] Add `-l, --keep-last <N>` (alias `--last`) to `Cli` and `keep-last` / `last` / `-l` support in key-value, TOML, and JSON configuration files.
+- [x] Supplement GFS retention (rather than disabling it) by always retaining the newest `N` snapshots in addition to GFS buckets (`hourly`/`daily`/`weekly`/`monthly`/`yearly`) in both hierarchical and flat modes.
+- [x] Document `-l, --keep-last <N>` in `--help`, embedded manual (`docs/MANUAL.md`), `docs/vcopy.1`, `docs/spec.md`, and `README.md`, and add unit/integration tests in `tests/prune_tests.rs`.
+
 ---
 
 ## Previously Completed

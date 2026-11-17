@@ -245,6 +245,7 @@ vcopy [OPTIONS] [SOURCES... DEST]... [COMMAND]
 | Option | Shorthand / Aliases | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `--max-versions` | `-n` | None | Retain only the newest $N$ snapshots (overrides GFS). |
+| `--keep-last` | `-l`, `--last` | 0 | Always retain the newest $N$ snapshots in addition to GFS buckets (supplements GFS for burst/irregular runs). |
 | `--keep-hourly` | `--hourly` | 24 | Retain one snapshot per hour for the past $N$ hours. |
 | `--keep-daily` | `--daily` | 7 | Retain one snapshot per day for the past $N$ days. |
 | `--keep-weekly` | `--weekly` | 4 | Retain one snapshot per week for the past $N$ weeks. |
@@ -462,7 +463,7 @@ Ideal when you need all files in a single flat folder (e.g. flat USB drives, pho
 
 ## Installation & Pre-Built Binaries
 
-Pre-compiled standalone static binaries for release `v0.3.2` are available on the [GitHub Releases](https://github.com/samilehtinen/vcopy/releases) page:
+Pre-compiled standalone static binaries for release `v0.3.3` are available on the [GitHub Releases](https://github.com/samilehtinen/vcopy/releases) page:
 
 | Platform | Architecture | Target Triple | Binary Name |
 | :--- | :--- | :--- | :--- |

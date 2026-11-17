@@ -24,6 +24,7 @@ static PRUNE_COPY_COUNTER: AtomicU64 = AtomicU64::new(0);
 #[derive(Debug, Clone)]
 pub struct PruneOptions {
     pub max_versions: Option<usize>,
+    pub keep_last: usize,
     pub keep_hourly: usize,
     pub keep_daily: usize,
     pub keep_weekly: usize,
@@ -31,6 +32,79 @@ pub struct PruneOptions {
     pub keep_yearly: usize,
     pub dry_run: bool,
     pub verbose: bool,
+}
+
+/// Select snapshot names to retain from `names_newest_first` according to `opts`.
+fn select_snapshots_to_keep(names_newest_first: &[String], opts: &PruneOptions) -> HashSet<String> {
+    let mut to_keep: HashSet<String> = HashSet::new();
+
+    if let Some(max_versions) = opts.max_versions {
+        for name in names_newest_first.iter().take(max_versions) {
+            to_keep.insert(name.clone());
+        }
+        return to_keep;
+    }
+
+    if opts.keep_last > 0 {
+        for name in names_newest_first.iter().take(opts.keep_last) {
+            to_keep.insert(name.clone());
+        }
+    }
+
+    let has_any_bucket = opts.keep_hourly > 0
+        || opts.keep_daily > 0
+        || opts.keep_weekly > 0
+        || opts.keep_monthly > 0
+        || opts.keep_yearly > 0;
+    if has_any_bucket {
+        if let Some(first) = names_newest_first.first() {
+            to_keep.insert(first.clone());
+        }
+    }
+
+    // Smart GFS retention
+    let mut hourly_buckets: HashSet<String> = HashSet::new();
+    let mut daily_buckets: HashSet<String> = HashSet::new();
+    let mut weekly_buckets: HashSet<String> = HashSet::new();
+    let mut monthly_buckets: HashSet<String> = HashSet::new();
+    let mut yearly_buckets: HashSet<String> = HashSet::new();
+
+    for name in names_newest_first {
+        if let Ok(ts) = NaiveDateTime::parse_from_str(name, "%Y-%m-%d_%H%M%S") {
+            let h_key = ts.format("%Y-%m-%d_%H").to_string();
+            if hourly_buckets.len() < opts.keep_hourly && !hourly_buckets.contains(&h_key) {
+                hourly_buckets.insert(h_key);
+                to_keep.insert(name.clone());
+            }
+
+            let d_key = ts.format("%Y-%m-%d").to_string();
+            if daily_buckets.len() < opts.keep_daily && !daily_buckets.contains(&d_key) {
+                daily_buckets.insert(d_key);
+                to_keep.insert(name.clone());
+            }
+
+            let iso_week = ts.iso_week();
+            let w_key = format!("{}-W{:02}", iso_week.year(), iso_week.week());
+            if weekly_buckets.len() < opts.keep_weekly && !weekly_buckets.contains(&w_key) {
+                weekly_buckets.insert(w_key);
+                to_keep.insert(name.clone());
+            }
+
+            let m_key = ts.format("%Y-%m").to_string();
+            if monthly_buckets.len() < opts.keep_monthly && !monthly_buckets.contains(&m_key) {
+                monthly_buckets.insert(m_key);
+                to_keep.insert(name.clone());
+            }
+
+            let y_key = ts.format("%Y").to_string();
+            if yearly_buckets.len() < opts.keep_yearly && !yearly_buckets.contains(&y_key) {
+                yearly_buckets.insert(y_key);
+                to_keep.insert(name.clone());
+            }
+        }
+    }
+
+    to_keep
 }
 
 pub fn run_prune(opts: &PruneOptions, dest: &Path) -> io::Result<()> {
@@ -59,66 +133,8 @@ pub fn run_prune(opts: &PruneOptions, dest: &Path) -> io::Result<()> {
     // Newest first for retention evaluation
     snapshots.sort_by(|a, b| b.name.cmp(&a.name));
 
-    let mut to_keep: HashSet<String> = HashSet::new();
-
-    if let Some(max_versions) = opts.max_versions {
-        for s in snapshots.iter().take(max_versions) {
-            to_keep.insert(s.name.clone());
-        }
-    } else {
-        let has_any_bucket = opts.keep_hourly > 0
-            || opts.keep_daily > 0
-            || opts.keep_weekly > 0
-            || opts.keep_monthly > 0
-            || opts.keep_yearly > 0;
-        if has_any_bucket {
-            if let Some(first) = snapshots.first() {
-                to_keep.insert(first.name.clone());
-            }
-        }
-
-        // Smart GFS retention
-        let mut hourly_buckets: HashSet<String> = HashSet::new();
-        let mut daily_buckets: HashSet<String> = HashSet::new();
-        let mut weekly_buckets: HashSet<String> = HashSet::new();
-        let mut monthly_buckets: HashSet<String> = HashSet::new();
-        let mut yearly_buckets: HashSet<String> = HashSet::new();
-
-        for s in &snapshots {
-            if let Ok(ts) = NaiveDateTime::parse_from_str(&s.name, "%Y-%m-%d_%H%M%S") {
-                let h_key = ts.format("%Y-%m-%d_%H").to_string();
-                if hourly_buckets.len() < opts.keep_hourly && !hourly_buckets.contains(&h_key) {
-                    hourly_buckets.insert(h_key);
-                    to_keep.insert(s.name.clone());
-                }
-
-                let d_key = ts.format("%Y-%m-%d").to_string();
-                if daily_buckets.len() < opts.keep_daily && !daily_buckets.contains(&d_key) {
-                    daily_buckets.insert(d_key);
-                    to_keep.insert(s.name.clone());
-                }
-
-                let iso_week = ts.iso_week();
-                let w_key = format!("{}-W{:02}", iso_week.year(), iso_week.week());
-                if weekly_buckets.len() < opts.keep_weekly && !weekly_buckets.contains(&w_key) {
-                    weekly_buckets.insert(w_key);
-                    to_keep.insert(s.name.clone());
-                }
-
-                let m_key = ts.format("%Y-%m").to_string();
-                if monthly_buckets.len() < opts.keep_monthly && !monthly_buckets.contains(&m_key) {
-                    monthly_buckets.insert(m_key);
-                    to_keep.insert(s.name.clone());
-                }
-
-                let y_key = ts.format("%Y").to_string();
-                if yearly_buckets.len() < opts.keep_yearly && !yearly_buckets.contains(&y_key) {
-                    yearly_buckets.insert(y_key);
-                    to_keep.insert(s.name.clone());
-                }
-            }
-        }
-    }
+    let names_newest_first: Vec<String> = snapshots.iter().map(|s| s.name.clone()).collect();
+    let to_keep = select_snapshots_to_keep(&names_newest_first, opts);
 
     // Load manifests of all snapshots that are being KEPT, sorted chronologically
     let mut kept_manifests = Vec::new();
@@ -242,65 +258,7 @@ fn run_prune_flat(opts: &PruneOptions, dest: &Path) -> io::Result<()> {
         .collect();
     snap_names.sort_by(|a, b| b.cmp(a));
 
-    let mut to_keep: HashSet<String> = HashSet::new();
-
-    if let Some(max_versions) = opts.max_versions {
-        for name in snap_names.iter().take(max_versions) {
-            to_keep.insert(name.clone());
-        }
-    } else {
-        let has_any_bucket = opts.keep_hourly > 0
-            || opts.keep_daily > 0
-            || opts.keep_weekly > 0
-            || opts.keep_monthly > 0
-            || opts.keep_yearly > 0;
-        if has_any_bucket {
-            if let Some(first) = snap_names.first() {
-                to_keep.insert(first.clone());
-            }
-        }
-
-        let mut hourly_buckets: HashSet<String> = HashSet::new();
-        let mut daily_buckets: HashSet<String> = HashSet::new();
-        let mut weekly_buckets: HashSet<String> = HashSet::new();
-        let mut monthly_buckets: HashSet<String> = HashSet::new();
-        let mut yearly_buckets: HashSet<String> = HashSet::new();
-
-        for name in &snap_names {
-            if let Ok(ts) = NaiveDateTime::parse_from_str(name, "%Y-%m-%d_%H%M%S") {
-                let h_key = ts.format("%Y-%m-%d_%H").to_string();
-                if hourly_buckets.len() < opts.keep_hourly && !hourly_buckets.contains(&h_key) {
-                    hourly_buckets.insert(h_key);
-                    to_keep.insert(name.clone());
-                }
-
-                let d_key = ts.format("%Y-%m-%d").to_string();
-                if daily_buckets.len() < opts.keep_daily && !daily_buckets.contains(&d_key) {
-                    daily_buckets.insert(d_key);
-                    to_keep.insert(name.clone());
-                }
-
-                let iso_week = ts.iso_week();
-                let w_key = format!("{}-W{:02}", iso_week.year(), iso_week.week());
-                if weekly_buckets.len() < opts.keep_weekly && !weekly_buckets.contains(&w_key) {
-                    weekly_buckets.insert(w_key);
-                    to_keep.insert(name.clone());
-                }
-
-                let m_key = ts.format("%Y-%m").to_string();
-                if monthly_buckets.len() < opts.keep_monthly && !monthly_buckets.contains(&m_key) {
-                    monthly_buckets.insert(m_key);
-                    to_keep.insert(name.clone());
-                }
-
-                let y_key = ts.format("%Y").to_string();
-                if yearly_buckets.len() < opts.keep_yearly && !yearly_buckets.contains(&y_key) {
-                    yearly_buckets.insert(y_key);
-                    to_keep.insert(name.clone());
-                }
-            }
-        }
-    }
+    let to_keep = select_snapshots_to_keep(&snap_names, opts);
 
     // Separate kept and pruned snapshots
     let mut kept_snapshots = Vec::new();

@@ -28,7 +28,7 @@ use verify::{run_verify, VerifyOptions};
 #[command(
     name = "vcopy",
     author = "Sami Lehtinen",
-    version = "0.3.2",
+    version = "0.3.3",
     about = "Browseable zero-link backup tool with history",
     long_about = "vcopy creates directly browseable, uncompressed filesystem mirrors on external drives and non-snapshotting filesystems (exFAT, FAT32, NTFS, ext4, APFS) while preserving a full historical change record in .version-history/.",
     subcommand_precedence_over_arg = true
@@ -83,6 +83,17 @@ struct Cli {
     /// Maximum number of snapshots to keep (overrides GFS retention)
     #[arg(short = 'n', long = "max-versions", value_name = "N", global = true)]
     max_versions: Option<usize>,
+
+    /// Always keep the newest N snapshots in addition to GFS retention buckets
+    #[arg(
+        short = 'l',
+        long = "keep-last",
+        alias = "last",
+        visible_alias = "last",
+        value_name = "N",
+        global = true
+    )]
+    keep_last: Option<usize>,
 
     /// Number of hourly snapshot buckets to retain in GFS mode (default: 24)
     #[arg(
@@ -481,6 +492,10 @@ fn execute() -> Result<(), String> {
     let max_versions = cli
         .max_versions
         .or_else(|| cfg.as_ref().and_then(|c| c.max_versions));
+    let keep_last = cli
+        .keep_last
+        .or_else(|| cfg.as_ref().and_then(|c| c.keep_last))
+        .unwrap_or(0);
     let keep_hourly_opt = cli
         .keep_hourly
         .or_else(|| cfg.as_ref().and_then(|c| c.keep_hourly));
@@ -499,6 +514,7 @@ fn execute() -> Result<(), String> {
 
     let prune_opts = PruneOptions {
         max_versions,
+        keep_last,
         keep_hourly: keep_hourly_opt.unwrap_or(if no_defaults { 0 } else { 24 }),
         keep_daily: keep_daily_opt.unwrap_or(if no_defaults { 0 } else { 7 }),
         keep_weekly: keep_weekly_opt.unwrap_or(if no_defaults { 0 } else { 4 }),
