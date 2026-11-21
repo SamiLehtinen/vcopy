@@ -73,6 +73,12 @@
 - [x] Supplement GFS retention (rather than disabling it) by always retaining the newest `N` snapshots in addition to GFS buckets (`hourly`/`daily`/`weekly`/`monthly`/`yearly`) in both hierarchical and flat modes.
 - [x] Document `-l, --keep-last <N>` in `--help`, embedded manual (`docs/MANUAL.md`), `docs/vcopy.1`, `docs/spec.md`, and `README.md`, and add unit/integration tests in `tests/prune_tests.rs`.
 
+## 10. Lock File Cleanup on Completion
+- [x] Track the lock file path on `BackupLock::Advisory` in `src/lock.rs` and remove `.version-history/.lock` (hierarchical) and `.version-history.lock` (flat) when the lock is dropped upon operation completion.
+- [x] Handle platform-safe cleanup ordering in `Drop` (remove before unlock on Unix to avoid inode-unlink races; unlock and close handle before removing on Windows).
+- [x] Add unit and integration tests verifying advisory lock cleanup on completion while preserving concurrent execution blocking.
+- [x] Update `docs/spec.md` to note that `.lock` / `.version-history.lock` is transient and removed when operations complete.
+
 ---
 
 ## Previously Completed

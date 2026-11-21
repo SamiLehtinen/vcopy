@@ -220,8 +220,285 @@ fn test_concurrency_lock() {
         .unwrap();
 
     assert!(!output.status.success() || !ctx.dst.join("payload.bin").exists());
+    assert!(
+        hist.join(".lock").exists(),
+        "contended process must not remove the active holder's .lock file"
+    );
 
     lock_file.unlock().unwrap();
+    drop(lock_file);
+
+    // Once unlocked, vcopy should succeed and clean up the .lock file on completion
+    let st = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st.success());
+    assert!(ctx.dst.join("payload.bin").is_file());
+    assert!(
+        !hist.join(".lock").exists(),
+        ".version-history/.lock should be removed after vcopy completes"
+    );
+
+    // Flat mode contention: holding .version-history.lock blocks vcopy --flat without deleting lock
+    let flat_ctx = TestContext::new("locking_flat");
+    flat_ctx.write_src_file("payload.bin", &[1u8; 512]);
+    fs::create_dir_all(&flat_ctx.dst).unwrap();
+    let flat_lock_path = flat_ctx.dst.join(".version-history.lock");
+    let flat_lock_file = File::create(&flat_lock_path).unwrap();
+    flat_lock_file.lock_exclusive().unwrap();
+
+    let flat_out = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--flat")
+        .arg(&flat_ctx.src)
+        .arg(&flat_ctx.dst)
+        .output()
+        .unwrap();
+    assert!(!flat_out.status.success() || !flat_ctx.dst.join("payload.bin").exists());
+    assert!(
+        flat_lock_path.exists(),
+        "contended flat process must not remove the active holder's .version-history.lock file"
+    );
+
+    flat_lock_file.unlock().unwrap();
+    drop(flat_lock_file);
+
+    let flat_st = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--flat")
+        .arg(&flat_ctx.src)
+        .arg(&flat_ctx.dst)
+        .status()
+        .unwrap();
+    assert!(flat_st.success());
+    assert!(flat_ctx.dst.join("payload.bin").is_file());
+    assert!(
+        !flat_lock_path.exists(),
+        ".version-history.lock should be removed after flat vcopy completes"
+    );
+}
+
+#[test]
+fn test_lock_file_removed_on_completion() {
+    // 1. Hierarchical mode: sync (initial + update) and prune
+    let ctx = TestContext::new("lock_cleanup_hier");
+    ctx.write_src_file("file.txt", b"v1");
+
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .arg("create")
+        .status()
+        .unwrap()
+        .success());
+    assert!(!ctx.dst.join(".version-history/.lock").exists());
+
+    ctx.write_src_file("file.txt", b"v2");
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .arg("create")
+        .status()
+        .unwrap()
+        .success());
+    assert!(!ctx.dst.join(".version-history/.lock").exists());
+
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("prune")
+        .arg(&ctx.dst)
+        .arg("-0")
+        .arg("--keep-last")
+        .arg("1")
+        .status()
+        .unwrap()
+        .success());
+    assert!(!ctx.dst.join(".version-history/.lock").exists());
+
+    // 2. Flat mode: sync (initial + update) and prune
+    let flat_ctx = TestContext::new("lock_cleanup_flat");
+    flat_ctx.write_src_file("file.txt", b"v1");
+
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--flat")
+        .arg(&flat_ctx.src)
+        .arg(&flat_ctx.dst)
+        .arg("create")
+        .status()
+        .unwrap()
+        .success());
+    assert!(!flat_ctx.dst.join(".version-history.lock").exists());
+
+    flat_ctx.write_src_file("file.txt", b"v2");
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--flat")
+        .arg(&flat_ctx.src)
+        .arg(&flat_ctx.dst)
+        .arg("create")
+        .status()
+        .unwrap()
+        .success());
+    assert!(!flat_ctx.dst.join(".version-history.lock").exists());
+
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--flat")
+        .arg("prune")
+        .arg(&flat_ctx.dst)
+        .arg("-0")
+        .arg("--keep-last")
+        .arg("1")
+        .status()
+        .unwrap()
+        .success());
+    assert!(!flat_ctx.dst.join(".version-history.lock").exists());
+
+    // 3. Default `auto` mode (sync + prune) in both hierarchical and flat modes
+    ctx.write_src_file("file.txt", b"v3-auto");
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap()
+        .success());
+    assert!(!ctx.dst.join(".version-history/.lock").exists());
+
+    flat_ctx.write_src_file("file.txt", b"v3-auto");
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--flat")
+        .arg(&flat_ctx.src)
+        .arg(&flat_ctx.dst)
+        .status()
+        .unwrap()
+        .success());
+    assert!(!flat_ctx.dst.join(".version-history.lock").exists());
+
+    // 4. Error-path cleanup: 100% wipeout circuit breaker aborts AFTER acquiring lock
+    fs::remove_file(ctx.src.join("file.txt")).unwrap();
+    let abort_out = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .output()
+        .unwrap();
+    assert!(!abort_out.status.success());
+    assert!(
+        !ctx.dst.join(".version-history/.lock").exists(),
+        ".version-history/.lock must be removed even when vcopy aborts with an error"
+    );
+}
+
+#[test]
+fn test_concurrent_vcopy_processes_lock_race_and_cleanup() {
+    use std::sync::Barrier;
+    use std::thread;
+
+    let ctx = TestContext::new("concurrent_proc_race");
+    for i in 0..20 {
+        ctx.write_src_file(
+            &format!("file_{}.txt", i),
+            format!("payload-{}", i).as_bytes(),
+        );
+    }
+
+    let procs = 4;
+    let barrier = Barrier::new(procs);
+    let results: Vec<std::process::Output> = thread::scope(|s| {
+        let mut handles = Vec::with_capacity(procs);
+        for _ in 0..procs {
+            handles.push(s.spawn(|| {
+                barrier.wait();
+                Command::new(env!("CARGO_BIN_EXE_vcopy"))
+                    .arg(&ctx.src)
+                    .arg(&ctx.dst)
+                    .arg("create")
+                    .output()
+                    .unwrap()
+            }));
+        }
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+
+    let successes = results.iter().filter(|o| o.status.success()).count();
+    assert!(
+        successes >= 1,
+        "at least one concurrent vcopy process must succeed"
+    );
+    for out in results.iter().filter(|o| !o.status.success()) {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("locked") || stderr.contains("WouldBlock"),
+            "unexpected non-lock failure in concurrent run: {}",
+            stderr
+        );
+    }
+
+    assert!(
+        !ctx.dst.join(".version-history/.lock").exists(),
+        ".version-history/.lock must not remain after concurrent processes finish"
+    );
+
+    // Repository must be completely intact and pass verification
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("verify")
+        .arg(&ctx.dst)
+        .status()
+        .unwrap()
+        .success());
+    assert!(!ctx.dst.join(".version-history/.lock").exists());
+
+    // 2. Flat mode concurrent process race
+    let flat_ctx = TestContext::new("concurrent_proc_race_flat");
+    for i in 0..20 {
+        flat_ctx.write_src_file(
+            &format!("file_{}.txt", i),
+            format!("flat-payload-{}", i).as_bytes(),
+        );
+    }
+
+    let flat_barrier = Barrier::new(procs);
+    let flat_results: Vec<std::process::Output> = thread::scope(|s| {
+        let mut handles = Vec::with_capacity(procs);
+        for _ in 0..procs {
+            handles.push(s.spawn(|| {
+                flat_barrier.wait();
+                Command::new(env!("CARGO_BIN_EXE_vcopy"))
+                    .arg("--flat")
+                    .arg("--allow-existing")
+                    .arg(&flat_ctx.src)
+                    .arg(&flat_ctx.dst)
+                    .arg("create")
+                    .output()
+                    .unwrap()
+            }));
+        }
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+
+    let flat_successes = flat_results.iter().filter(|o| o.status.success()).count();
+    assert!(
+        flat_successes >= 1,
+        "at least one concurrent flat vcopy process must succeed"
+    );
+    for out in flat_results.iter().filter(|o| !o.status.success()) {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("locked") || stderr.contains("WouldBlock"),
+            "unexpected non-lock failure in concurrent flat run: {}",
+            stderr
+        );
+    }
+
+    assert!(
+        !flat_ctx.dst.join(".version-history.lock").exists(),
+        ".version-history.lock must not remain after concurrent flat processes finish"
+    );
+
+    assert!(Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("--flat")
+        .arg("verify")
+        .arg(&flat_ctx.dst)
+        .status()
+        .unwrap()
+        .success());
+    assert!(!flat_ctx.dst.join(".version-history.lock").exists());
 }
 
 #[test]

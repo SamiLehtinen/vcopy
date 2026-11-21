@@ -29,7 +29,7 @@
   * Validates all relative manifest paths via `is_safe_relative_path` (forbidding absolute paths, `..`, `.`, and `.version-history` path segments).
   * Enforces strict validation before removing snapshot directories during pruning (requiring 17-byte `YYYY-MM-DD_HHMMSS` format, direct parent containment, and non-symlink verification).
 * **Heuristic Orphan Scan Recovery:** In both flat and hierarchical modes, missing or destroyed metadata manifests (`manifest.json`, `baseline.json`, `.version-history.manifest.jsonl`) are automatically reconstructed on-the-fly by scanning filesystem contents, `.deleted` markers, and `.v<N>` version numbers.
-* **Non-Blocking Resilient Advisory Locking:** Modifying target paths requires an exclusive advisory lock on `.version-history/.lock`. If the underlying filesystem (e.g., exFAT FUSE) does not support POSIX `flock`/`fcntl`, it automatically falls back to an atomic PID-file locking mechanism (`.version-history/.pid_lock`).
+* **Non-Blocking Resilient Advisory Locking:** Modifying target paths requires an exclusive advisory lock on `.version-history/.lock` (or `.version-history.lock` in flat mode). Lock files are transient and automatically removed when the operation completes. If the underlying filesystem (e.g., exFAT FUSE) does not support POSIX `flock`/`fcntl`, it automatically cleans up the probe lock file and falls back to an atomic PID-file locking mechanism (`.version-history/.pid_lock`).
 
 ---
 
@@ -46,7 +46,7 @@ The live files mirror the source layout at `<destination>/`. Displaced historica
 │   ├── img01.jpg                       # Current live mirror of img01.jpg
 │   └── img02.jpg
 └── .version-history/
-    ├── .lock                           # Advisory concurrency lock / pid fallback
+    ├── .lock                           # Advisory concurrency lock / pid fallback (transient; removed on completion)
     ├── baseline.json                   # Authoritative manifest of the current live mirror
     ├── 2026-11-09_083000/              # Historical snapshot folder (state at 08:30:00)
     │   ├── manifest.json               # Full manifest snapshot for 08:30:00
@@ -71,7 +71,7 @@ All files are stored flat inside `<destination>/` without subfolders. Live files
 ├── notes.txt                           # First file with basename notes.txt
 ├── notes_2.txt                         # Disambiguated basename collision
 ├── notes_2.v1.txt                      # Displaced revision of notes_2.txt
-├── .version-history.lock               # Advisory concurrency lock
+├── .version-history.lock               # Advisory concurrency lock (transient; removed on completion)
 ├── .version-history.baseline.json      # Latest live state manifest
 └── .version-history.manifest.jsonl     # Snapshot history ledger
 ```
@@ -238,9 +238,11 @@ pub struct SourceMapping {
 
 ### 4.5 Resilient Advisory Locking (`src/lock.rs`)
 
-* Attempts non-blocking advisory locking (`try_lock_exclusive`) on `.version-history/.lock`.
-* Returns `WouldBlock` error immediately if another process holds the lock.
-* Falls back to `.version-history/.pid_lock` with atomic file creation and PID liveness validation if the filesystem returns `ENOTSUP` (95) or `ENOSYS` (38) (common on exFAT/FAT32 FUSE mounts).
+* Attempts non-blocking advisory locking (`try_lock_exclusive`) on `.version-history/.lock` (hierarchical) or `.version-history.lock` (flat).
+* On Unix, verifies `(dev, ino)` of the locked descriptor against the path on disk after locking to prevent stale-inode acquisition during concurrent unlink/unlock handoffs.
+* Returns `WouldBlock` error immediately if another process holds the lock, leaving the active holder's lock file intact.
+* Removes the lock file automatically when the `BackupLock` guard drops upon operation completion (unlinking before unlock on Unix to prevent inode-unlink races; unlocking and closing the handle before removal on Windows).
+* Falls back to `.version-history/.pid_lock` (or `.version-history.pid_lock` in flat mode) with atomic file creation and PID liveness validation if the filesystem returns `Unsupported` / `ENOTSUP` / `ENOSYS` (common on exFAT/FAT32 FUSE mounts), removing the unused `.lock` probe file.
 
 ---
 
