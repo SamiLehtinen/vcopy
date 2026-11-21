@@ -282,7 +282,7 @@ The live mirror resides at `<dest>/` exactly matching the source hierarchy. When
 │   ├── report.pdf                      # Current live version
 │   └── notes.txt                       # Current live version
 └── .version-history/
-    ├── .lock                           # Advisory lock / PID fallback
+    ├── .lock                           # Transient advisory lock / PID fallback (removed on completion)
     ├── baseline.json                   # Current live manifest
     ├── 2026-11-09_083000/              # Historical snapshot folder
     │   ├── manifest.json               # Full manifest for this snapshot
@@ -314,14 +314,14 @@ All files (live files, disambiguated sources, and numbered versions) reside in a
    Never creates or follows hardlinks, symlinks, or block reflinks. Destination mirrors are 100% portable and fully compatible with FAT32, exFAT, NTFS, ext4, and cloud storage providers.
 2. **Directly Browseable Uncompressed Files**:
    Live mirror files and historical versions are stored as standard, uncompressed files readable by any file explorer or utility without special tools.
-3. **Atomic Staging Writes**:
-   All files and metadata manifests are written to temporary staging files (`.<file>.tmp.<pid>.<id>`) and renamed into place atomically to protect against power loss or mid-process termination.
+3. **Atomic Staging Writes & Streaming Cache Management**:
+   All files and metadata manifests are written to temporary staging files (`.<file>.tmp.<pid>.<id>`) and renamed into place atomically to protect against power loss or mid-process termination. File copies stream explicitly in userspace (1 MiB buffer for files `>= 1 MiB`) with best-effort preallocation and platform cache hints (Linux `fallocate` + `POSIX_FADV_SEQUENTIAL`/`NOREUSE`/rolling 1 MiB `DONTNEED`; Windows `FILE_FLAG_SEQUENTIAL_SCAN` + `set_len`) to avoid dirty-page flush stalls.
 4. **Nanosecond Timestamps & SIMD CRC32**:
    FAT32 and exFAT store timestamps with 2-second resolution drift. `vcopy` calculates exact nanosecond modification times and fast SIMD-accelerated CRC32 hashes stored in `manifest.json` to prevent unnecessary recopying.
 5. **Reverse-Delta Pruning Consolidation**:
    When intermediate snapshots are pruned, displaced files needed by surviving older snapshots are automatically consolidated and migrated into the preceding kept snapshot before deletion. No restore point is ever broken.
 6. **Advisory Locking with PID Fallback**:
-   Concurrently running backups on the same destination are blocked using `.lock`. If the filesystem lacks POSIX `flock` support (e.g. FUSE mounts), an atomic PID lockfile is used automatically.
+   Concurrently running backups on the same destination are blocked using `.lock` (removed automatically upon completion). If the filesystem lacks POSIX `flock` support (e.g. FUSE mounts), an atomic PID lockfile is used automatically.
 7. **100% Wipeout Circuit Breaker**:
    If source directories are missing, empty, or unmounted, `vcopy` halts immediately to prevent deleting 100% of files in the destination mirror. Override with `--allow-empty-source` or `-F / --force`.
 8. **Protected System & Foreign Directory Guards**:

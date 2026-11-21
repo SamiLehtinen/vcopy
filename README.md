@@ -410,7 +410,7 @@ Ideal for traditional backups where the directory tree is preserved and displace
 │   ├── report.pdf                      # Current live version
 │   └── notes.txt                       # Current live version
 └── .version-history/
-    ├── .lock                           # Advisory lock / PID fallback
+    ├── .lock                           # Transient advisory lock / PID fallback (removed on completion)
     ├── baseline.json                   # Current live manifest
     ├── 2026-11-09_083000/              # Historical snapshot folder
     │   ├── manifest.json               # Full manifest for this snapshot
@@ -434,7 +434,7 @@ Ideal when you need all files in a single flat folder (e.g. flat USB drives, pho
 ├── notes.txt                           # First file with basename notes.txt
 ├── notes_2.txt                         # Disambiguated basename collision
 ├── notes_2.v1.txt                      # Historical version of notes_2.txt
-├── .version-history.lock               # Advisory lock
+├── .version-history.lock               # Transient advisory lock (removed on completion)
 ├── .version-history.baseline.json      # Latest live state manifest
 └── .version-history.manifest.jsonl     # Snapshot history ledger
 ```
@@ -449,7 +449,7 @@ Ideal when you need all files in a single flat folder (e.g. flat USB drives, pho
 
 * **Zero Links**: Never creates or follows hardlinks, symlinks, or block reflinks. Operates safely across FAT32, exFAT, external USB drives, and cloud-synced folders.
 * **Directly Browseable Destination**: Live mirror files remain raw, uncompressed, and directly readable in any standard OS file manager without proprietary archive extractors.
-* **Atomic Staging Writes**: Writes all file copies and manifests through temporary files (`.<file>.tmp.<pid>.<id>`) and atomically renames them into place to prevent corruption upon abrupt power loss or cancellation.
+* **Atomic Staging Writes & Streaming Cache Management**: Writes all file copies and manifests through temporary files (`.<file>.tmp.<pid>.<id>`) and atomically renames them into place to prevent corruption upon abrupt power loss or cancellation. Streams file payloads explicitly in userspace (no `copy_file_range` reflinks), using a 1 MiB buffer with best-effort preallocation and platform cache hints (Linux `fallocate` + `POSIX_FADV_SEQUENTIAL`/`NOREUSE`/rolling 1 MiB `DONTNEED`; Windows `FILE_FLAG_SEQUENTIAL_SCAN` + `set_len`) for large files (`>= 1 MiB`).
 * **Nanosecond Timestamps & SIMD CRC32**: Overcomes FAT/exFAT 2-second timestamp drift by persisting exact nanosecond modification timestamps (`mtime_ns`) and fast SIMD CRC32 hashes in metadata manifests.
 * **Safety Circuit Breakers & Path Guards**:
   * **100% Deletion Wipeout Prevention**: If source path is empty, unmounted, or yields 0 files while the destination contains existing files, `vcopy` refuses to wipe the destination, aborting with a safety error unless explicitly overridden with `--allow-empty-source` or `-F / --force`.
@@ -457,13 +457,13 @@ Ideal when you need all files in a single flat folder (e.g. flat USB drives, pho
   * **Protected Directory Guards**: Refuses to sync or restore directly into system root (`/`), core system paths (`/etc`, `/usr`, `/bin`, `C:\Windows`, etc.), user home directory root (`$HOME`, `~`), or populated foreign directories lacking `vcopy` repository metadata unless overridden with `--allow-existing` or `-F / --force`.
 * **Heuristic Orphan Scan Recovery**: If metadata files (`manifest.json`, `baseline.json`, or `.version-history.manifest.jsonl`) are deleted or corrupted, `vcopy` automatically scans disk, reconstructs snapshots from displaced files, `.deleted` markers, and `.v<N>` version numbers, restoring point-in-time recovery capabilities in both hierarchical and flat modes.
 * **Safe Pruning (Reverse-Delta Consolidation)**: Pruning intermediate snapshots migrates displaced files needed by surviving older snapshots before deletion, guaranteeing point-in-time restore integrity across GFS retention cycles.
-* **Non-Blocking Resilient Advisory Locking**: Uses advisory locking (`.version-history/.lock` or `.version-history.lock`) to block overlapping concurrent runs, falling back automatically to an atomic PID-file lock on filesystems that do not support POSIX `flock` (e.g. FUSE mounts).
+* **Non-Blocking Resilient Advisory Locking**: Uses advisory locking (`.version-history/.lock` or `.version-history.lock`, removed automatically on completion) to block overlapping concurrent runs, falling back automatically to an atomic PID-file lock on filesystems that do not support POSIX `flock` (e.g. FUSE mounts).
 
 ---
 
 ## Installation & Pre-Built Binaries
 
-Pre-compiled standalone static binaries for release `v0.3.3` are available on the [GitHub Releases](https://github.com/samilehtinen/vcopy/releases) page:
+Pre-compiled standalone static binaries for release `v0.3.4` are available on the [GitHub Releases](https://github.com/samilehtinen/vcopy/releases) page:
 
 | Platform | Architecture | Target Triple | Binary Name |
 | :--- | :--- | :--- | :--- |

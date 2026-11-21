@@ -1,5 +1,5 @@
 use std::fs::{self, File, FileTimes};
-use std::io::{self, BufRead, BufReader, Read};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -338,12 +338,25 @@ pub fn is_foreign_populated_directory(dest: &Path) -> bool {
         return false;
     }
     if let Ok(entries) = std::fs::read_dir(dest) {
+        let mut has_foreign = false;
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
+            if name == ".version-history"
+                || name == ".version-history.lock"
+                || name == ".version-history.pid_lock"
+                || name == ".version-history.baseline.json"
+                || name == ".version-history.manifest.jsonl"
+                || name == ".versionhistory.baseline.json"
+                || name == ".versionhistory.manifest.jsonl"
+                || name == ".vcopy.json"
+            {
+                return false;
+            }
             if !is_reserved_flat_name(&name) {
-                return true;
+                has_foreign = true;
             }
         }
+        return has_foreign;
     }
     false
 }
@@ -643,6 +656,158 @@ pub fn set_file_mtime(path: &Path, mtime: SystemTime) -> std::io::Result<()> {
     Ok(())
 }
 
+const SMALL_COPY_BUF_SIZE: usize = 64 * 1024;
+const LARGE_COPY_BUF_SIZE: usize = 1024 * 1024; // 1 MiB
+const LARGE_FILE_THRESHOLD: u64 = 1024 * 1024; // 1 MiB
+#[cfg(target_os = "linux")]
+const FADVISE_WINDOW_BYTES: u64 = LARGE_COPY_BUF_SIZE as u64; // 1 MiB rolling DONTNEED window
+
+fn open_src_for_copy(src: &Path, is_large: bool) -> io::Result<File> {
+    let mut opts = fs::OpenOptions::new();
+    opts.read(true);
+    #[cfg(windows)]
+    if is_large {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_SEQUENTIAL_SCAN: u32 = 0x0800_0000;
+        opts.custom_flags(FILE_FLAG_SEQUENTIAL_SCAN);
+    }
+    let _ = is_large;
+    opts.open(src)
+}
+
+fn create_dst_for_copy(tmp_path: &Path, is_large: bool) -> io::Result<File> {
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(windows)]
+    if is_large {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_SEQUENTIAL_SCAN: u32 = 0x0800_0000;
+        opts.custom_flags(FILE_FLAG_SEQUENTIAL_SCAN);
+    }
+    let _ = is_large;
+    opts.open(tmp_path)
+}
+
+#[cfg(target_os = "linux")]
+fn advise_sequential_noreuse(file: &File) {
+    use std::os::unix::io::AsRawFd;
+    let fd = file.as_raw_fd();
+    unsafe {
+        let _ = libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_SEQUENTIAL);
+        let _ = libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_NOREUSE);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn advise_dontneed(file: &File, offset: u64, len: u64) {
+    if len == 0 {
+        return;
+    }
+    if let (Ok(off), Ok(l)) = (libc::off_t::try_from(offset), libc::off_t::try_from(len)) {
+        use std::os::unix::io::AsRawFd;
+        unsafe {
+            let _ = libc::posix_fadvise(file.as_raw_fd(), off, l, libc::POSIX_FADV_DONTNEED);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn preallocate_file(file: &File, size: u64) -> bool {
+    if size == 0 {
+        return false;
+    }
+    if let Ok(len) = libc::off_t::try_from(size) {
+        use std::os::unix::io::AsRawFd;
+        // Use fallocate(2) directly rather than posix_fallocate(3): on glibc, posix_fallocate
+        // falls back to manually zero-filling the entire file on filesystems without fallocate
+        // support (FAT32, exFAT, FUSE), which would double writes. fallocate(2) simply returns
+        // -1 (EOPNOTSUPP) with zero overhead on unsupported filesystems.
+        unsafe { libc::fallocate(file.as_raw_fd(), 0, 0, len) == 0 }
+    } else {
+        false
+    }
+}
+
+#[cfg(windows)]
+fn preallocate_file(file: &File, size: u64) -> bool {
+    if size == 0 {
+        return false;
+    }
+    file.set_len(size).is_ok()
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+fn preallocate_file(_file: &File, _size: u64) -> bool {
+    false
+}
+
+fn copy_stream(
+    reader: &mut File,
+    writer: &mut File,
+    src_size: u64,
+    is_large: bool,
+) -> io::Result<u64> {
+    if !is_large {
+        let mut buf = [0u8; SMALL_COPY_BUF_SIZE];
+        let mut total = 0u64;
+        loop {
+            let n = match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
+            };
+            writer.write_all(&buf[..n])?;
+            total += n as u64;
+        }
+        return Ok(total);
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        advise_sequential_noreuse(reader);
+        advise_sequential_noreuse(writer);
+    }
+
+    let preallocated = preallocate_file(writer, src_size);
+    let mut buf = vec![0u8; LARGE_COPY_BUF_SIZE];
+    let mut total = 0u64;
+    #[cfg(target_os = "linux")]
+    let mut dropped = 0u64;
+
+    loop {
+        let n = match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        writer.write_all(&buf[..n])?;
+        total += n as u64;
+
+        #[cfg(target_os = "linux")]
+        while total - dropped >= FADVISE_WINDOW_BYTES {
+            advise_dontneed(reader, dropped, FADVISE_WINDOW_BYTES);
+            advise_dontneed(writer, dropped, FADVISE_WINDOW_BYTES);
+            dropped += FADVISE_WINDOW_BYTES;
+        }
+    }
+
+    // If the source file shrank concurrently after preallocation, trim trailing zero bytes.
+    if preallocated && total < src_size {
+        writer.set_len(total)?;
+    }
+
+    #[cfg(target_os = "linux")]
+    if total > dropped {
+        let rem = total - dropped;
+        advise_dontneed(reader, dropped, rem);
+        advise_dontneed(writer, dropped, rem);
+    }
+
+    Ok(total)
+}
+
 pub fn copy_atomic(src: &Path, dst: &Path, pid: u32, counter: u64) -> std::io::Result<u64> {
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent)?;
@@ -654,12 +819,27 @@ pub fn copy_atomic(src: &Path, dst: &Path, pid: u32, counter: u64) -> std::io::R
     let tmp_name = format!(".{}.tmp.{}.{}", orig_name, pid, counter);
     let tmp_path = dst.with_file_name(tmp_name);
 
-    // Copy contents via io::copy rather than fs::copy so that restrictive OS permissions
-    // (such as chmod 0444 or read-only flags) are not applied to the backup mirror files.
+    let src_meta = fs::metadata(src).ok();
+    let src_size = src_meta.as_ref().map(|m| m.len()).unwrap_or(0);
+    let is_large = src_size >= LARGE_FILE_THRESHOLD;
+
+    // Copy via explicit userspace streaming rather than fs::copy/io::copy so that:
+    // 1. Restrictive OS permissions (chmod 0444 / readonly) are not applied to backup mirror files.
+    // 2. Same-filesystem copy_file_range reflinks cannot occur (preserving the zero-links invariant).
+    // 3. Large files use a 1 MiB buffer with preallocation and platform cache hints
+    //    (rolling 1 MiB POSIX_FADV_DONTNEED on Linux, FILE_FLAG_SEQUENTIAL_SCAN on Windows) to
+    //    prevent dirty-page flush stalls.
     let copy_res = (|| -> std::io::Result<u64> {
-        let mut reader = File::open(src)?;
-        let mut writer = File::create(&tmp_path)?;
-        std::io::copy(&mut reader, &mut writer)
+        let mut reader = open_src_for_copy(src, is_large)?;
+        let mut writer = create_dst_for_copy(&tmp_path, is_large)?;
+        let bytes = copy_stream(&mut reader, &mut writer, src_size, is_large)?;
+        // Preserve modified timestamp on the already-open handle before closing
+        if let Some(ref meta) = src_meta {
+            if let Ok(mtime) = meta.modified() {
+                let _ = writer.set_times(FileTimes::new().set_modified(mtime));
+            }
+        }
+        Ok(bytes)
     })();
     let bytes = match copy_res {
         Ok(b) => b,
@@ -668,13 +848,6 @@ pub fn copy_atomic(src: &Path, dst: &Path, pid: u32, counter: u64) -> std::io::R
             return Err(e);
         }
     };
-
-    // Preserve modified timestamp on copied file
-    if let Ok(meta) = fs::metadata(src) {
-        if let Ok(mtime) = meta.modified() {
-            let _ = set_file_mtime(&tmp_path, mtime);
-        }
-    }
 
     if let Err(e) = fs::rename(&tmp_path, dst) {
         let _ = fs::remove_file(&tmp_path);
@@ -1078,5 +1251,109 @@ mod tests {
         assert_eq!(suggest_closest("kepe-daily", &flags), Some("keep-daily"));
         assert_eq!(suggest_closest("dryrun", &flags), Some("dry-run"));
         assert_eq!(suggest_closest("no-default", &flags), Some("no-defaults"));
+    }
+
+    #[test]
+    fn test_copy_atomic_small_exact_and_large_streaming() {
+        let base =
+            std::env::temp_dir().join(format!("vcopy_copy_atomic_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+
+        let cases: &[(&str, usize)] = &[
+            ("empty.bin", 0),
+            ("small.bin", 4096 + 37),
+            ("exact_1m.bin", LARGE_FILE_THRESHOLD as usize),
+            ("large_3m_tail.bin", 3 * 1024 * 1024 + 12_345),
+        ];
+
+        let pid = std::process::id();
+        for (idx, (name, size)) in cases.iter().enumerate() {
+            let src = base.join(format!("src_{}", name));
+            let dst = base.join("out").join(name);
+
+            let mut data = vec![0u8; *size];
+            for (i, b) in data.iter_mut().enumerate() {
+                *b = ((i.wrapping_mul(31) ^ (i >> 8)) & 0xff) as u8;
+            }
+            fs::write(&src, &data).unwrap();
+
+            let expected_mtime = UNIX_EPOCH + Duration::from_secs(1_700_000_000 + idx as u64);
+            set_file_mtime(&src, expected_mtime).unwrap();
+
+            let copied = copy_atomic(&src, &dst, pid, idx as u64).unwrap();
+            assert_eq!(copied, *size as u64, "byte count mismatch for {}", name);
+            assert_eq!(
+                compute_file_crc32(&src).unwrap(),
+                compute_file_crc32(&dst).unwrap(),
+                "CRC32 mismatch for {}",
+                name
+            );
+            let dst_meta = fs::metadata(&dst).unwrap();
+            assert_eq!(dst_meta.len(), *size as u64);
+            let dst_mtime = dst_meta.modified().unwrap();
+            assert_eq!(
+                dst_mtime.duration_since(UNIX_EPOCH).unwrap().as_secs(),
+                expected_mtime.duration_since(UNIX_EPOCH).unwrap().as_secs(),
+                "mtime mismatch for {}",
+                name
+            );
+        }
+
+        // Verify no leftover .tmp staging files in output directory
+        for entry in fs::read_dir(base.join("out")).unwrap() {
+            let name = entry.unwrap().file_name().to_string_lossy().to_string();
+            assert!(
+                !name.contains(".tmp."),
+                "leftover temp file found: {}",
+                name
+            );
+        }
+
+        // Verify overwriting an existing destination replaces it atomically
+        let overwrite_src = base.join("overwrite_src.bin");
+        let overwrite_dst = base.join("out").join("large_3m_tail.bin");
+        fs::write(&overwrite_src, b"smaller replacement payload").unwrap();
+        let overwritten = copy_atomic(&overwrite_src, &overwrite_dst, pid, 500).unwrap();
+        assert_eq!(overwritten, 27);
+        assert_eq!(
+            fs::read(&overwrite_dst).unwrap(),
+            b"smaller replacement payload"
+        );
+
+        // Verify preallocated file is trimmed if source shrinks mid-copy
+        let shrink_src = base.join("shrink_src.bin");
+        let shrink_dst = base.join("out").join("shrink_dst.bin");
+        let actual_data = vec![0xABu8; LARGE_FILE_THRESHOLD as usize + 500];
+        fs::write(&shrink_src, &actual_data).unwrap();
+        {
+            let mut r = open_src_for_copy(&shrink_src, true).unwrap();
+            let mut w = create_dst_for_copy(&shrink_dst, true).unwrap();
+            // Simulate src_size being larger than actual bytes read (concurrent shrink)
+            let inflated_size = actual_data.len() as u64 + 2 * 1024 * 1024;
+            let written = copy_stream(&mut r, &mut w, inflated_size, true).unwrap();
+            assert_eq!(written, actual_data.len() as u64);
+        }
+        assert_eq!(
+            fs::metadata(&shrink_dst).unwrap().len(),
+            actual_data.len() as u64,
+            "preallocated file must be trimmed to actual bytes written if source shrinks"
+        );
+
+        // Verify missing source fails cleanly without leaving temp files
+        let missing_src = base.join("does_not_exist.bin");
+        let missing_dst = base.join("out").join("should_not_exist.bin");
+        assert!(copy_atomic(&missing_src, &missing_dst, pid, 999).is_err());
+        assert!(!missing_dst.exists());
+        for entry in fs::read_dir(base.join("out")).unwrap() {
+            let name = entry.unwrap().file_name().to_string_lossy().to_string();
+            assert!(
+                !name.contains(".tmp."),
+                "leftover temp file after error: {}",
+                name
+            );
+        }
+
+        let _ = fs::remove_dir_all(&base);
     }
 }

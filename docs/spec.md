@@ -1,6 +1,6 @@
 # Engineering Specification: `vcopy`
 
-**Version:** 0.3.3  
+**Version:** 0.3.4  
 **Author:** Sami Lehtinen  
 **License:** 0BSD  
 
@@ -20,7 +20,7 @@
 * **Directly Browseable Destination:** Files in the destination mirror root are always raw, uncompressed files accessible by standard OS file managers (Windows Explorer, macOS Finder, Linux file managers) without proprietary extractors.
 * **Nanosecond Timestamps & CRC32 Integrity:** Overcomes exFAT/FAT32 2-second timestamp drift by persisting exact nanosecond modification timestamps (`mtime_ns`) and SIMD-accelerated CRC32 checksums in metadata manifests (`baseline.json`, `manifest.json`, and `.version-history.manifest.jsonl`).
 * **Cross-Platform Permission Preservation (`-p / --preserve-permissions`):** Optional tracking of Unix file mode permissions and Windows/DOS readonly attributes. Persisted in snapshot manifests and restored on compatible platforms without encumbering non-POSIX filesystems.
-* **Atomic Staging Writes:** All file copies and manifest writes use temporary staging files (`.<file>.tmp.<pid>.<counter>`) and atomic renames to prevent partial corruption from power failures or abrupt termination.
+* **Atomic Staging Writes & Streaming Cache Management:** All file copies and manifest writes use temporary staging files (`.<file>.tmp.<pid>.<counter>`) and atomic renames to prevent partial corruption from power failures or abrupt termination. File copies stream explicitly in userspace (never relying on `copy_file_range` reflinks), using a 64 KiB buffer for small files (`< 1 MiB`) and a 1 MiB buffer for larger files (`>= 1 MiB`) with best-effort preallocation and platform cache hints (on Linux: `POSIX_FADV_SEQUENTIAL`, `POSIX_FADV_NOREUSE`, `fallocate(2)`, and a 1 MiB rolling `POSIX_FADV_DONTNEED` window; on Windows: `FILE_FLAG_SEQUENTIAL_SCAN` and `set_len`) to prevent dirty-page flush stalls on SMR/CoW/external drives.
 * **Strict Path, Purge & Safety Circuit Breakers:**
   * **100% Deletion Wipeout Prevention:** Sync operations that would result in deleting 100% of files in a populated destination (e.g. empty or detached source) are blocked by an automatic circuit breaker unless `--allow-empty-source` or `--force` is specified.
   * **Missing / Unmounted Source Check:** Verifies source path existence prior to execution to prevent accidental wipeout from unmounted volumes unless overridden with `--allow-missing-source` or `--force`.

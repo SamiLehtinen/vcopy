@@ -79,6 +79,12 @@
 - [x] Add unit and integration tests verifying advisory lock cleanup on completion while preserving concurrent execution blocking.
 - [x] Update `docs/spec.md` to note that `.lock` / `.version-history.lock` is transient and removed when operations complete.
 
+## 11. Streaming Copy, Preallocation & Rolling Cache Eviction
+- [x] Replace `std::io::copy` in `copy_atomic` (`src/util.rs`) with explicit userspace streaming (64 KiB buffer for `< 1 MiB` files, 1 MiB buffer for `>= 1 MiB` files), avoiding same-filesystem `copy_file_range` reflinks.
+- [x] Add best-effort preallocation (`fallocate(2)` on Linux without zero-fill fallback, `set_len` on Windows) with size-shrink trimming and `mtime` update on the open writer handle.
+- [x] Add Linux `POSIX_FADV_SEQUENTIAL`, `POSIX_FADV_NOREUSE`, and a 1 MiB rolling `POSIX_FADV_DONTNEED` window (plus Windows `FILE_FLAG_SEQUENTIAL_SCAN`) to prevent dirty-page flush stalls on SMR/CoW/external drives.
+- [x] Fix `is_foreign_populated_directory` TOCTOU race during concurrent first-run locking, update `docs/spec.md`, and add unit tests in `src/util.rs`.
+
 ---
 
 ## Previously Completed
