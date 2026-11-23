@@ -4,6 +4,8 @@ All notable changes to `vcopy` starting from the initial public binary release (
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-23 — Decoupled 3-slot copy pipeline, Windows lock fix & release automation
+
 ### Added
 - **Decoupled 3-slot ring-buffer copy pipeline (`>= 2 MiB`):** Added `src/copy_pipeline.rs` implementing a persistent single-writer `3 × 1 MiB` reusable heap ring-buffer pipeline for Tier 3 files (`>= 2 MiB`), allowing concurrent source reads and destination writes while keeping `< 1 MiB` (Tier 1, `64 KiB` stack) and `1–2 MiB` (Tier 2, `1 MiB` sync) overhead-free and preserving all `copy_atomic` invariants.
 

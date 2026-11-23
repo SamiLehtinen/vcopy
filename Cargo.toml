@@ -1,6 +1,6 @@
 [package]
 name = "vcopy"
-version = "0.3.4"
+version = "0.4.0"
 edition = "2021"
 authors = ["Sami Lehtinen"]
 description = "Browseable, zero-link, multi-platform file sync with snapshot history"
