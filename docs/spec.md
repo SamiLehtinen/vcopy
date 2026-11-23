@@ -227,7 +227,7 @@ pub struct SourceMapping {
   - Evaluates snapshots chronologically (oldest to newest).
   - Before pruning snapshot $S_{\text{prune}}$, locates the immediately preceding kept snapshot $S_{\text{prev\_kept}}$.
   - Any displaced file in $S_{\text{prune}}$ required by $S_{\text{prev\_kept}}$ and not yet present in $S_{\text{prev\_kept}}$ is migrated into $S_{\text{prev\_kept}}$ before removing $S_{\text{prune}}$.
-  - In flat mode, historical version files are consolidated and re-indexed to prevent gaps while preserving point-in-time integrity for all surviving snapshots.
+  - In flat mode, historical version files no longer referenced by any surviving snapshot are deleted. Surviving `.vN` files are never renamed or re-indexed (see Monotonic stability above), so gaps in version numbering are expected; point-in-time integrity is preserved via the ledger mappings.
   - Any I/O failure during consolidation aborts pruning before any directory removal.
 
 ### 4.4 Integrity Verification & Bit-Rot Detection (`src/verify.rs`)
@@ -235,7 +235,7 @@ pub struct SourceMapping {
 * Subcommands: `vcopy verify` and `vcopy check`.
 * Compares physical destination files against recorded manifests (`baseline.json`, `<snapshot>/manifest.json`, and `.version-history.manifest.jsonl`).
 * Modes:
-  - **Full (default):** Recomputes SIMD-accelerated CRC32 checksums on disk and compares against manifest values, detecting bit-rot, silent data corruption, or unauthorized tampering.
+  - **Full (default):** Recomputes SIMD-accelerated CRC32 checksums on disk and compares against manifest values, detecting bit-rot or silent data corruption.
   - **Quick (`--quick`):** Compares file existence, size in bytes, and nanosecond modification timestamps without reading file payloads.
 * Visual Reporting: Summarizes verified files, corrupted/mismatched files (displaying expected vs. actual CRC32), missing files, and untracked orphan files.
 * Returns non-zero process exit code if any corruption or missing file is detected.

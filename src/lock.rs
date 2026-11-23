@@ -85,6 +85,7 @@ where
     const FILE_FLAG_DELETE_ON_CLOSE: u32 = 0x0400_0000;
     const ERROR_SHARING_VIOLATION: i32 = 32;
 
+    let mut sharing_retries = 0u32;
     for _ in 0..16 {
         let mut open_opts = OpenOptions::new();
         open_opts
@@ -105,7 +106,14 @@ where
                 });
             }
             Err(e) if e.raw_os_error() == Some(ERROR_SHARING_VIOLATION) => {
-                return Err(io::Error::new(io::ErrorKind::WouldBlock, held_msg));
+                // A real holder keeps the handle for the whole run, while antivirus or
+                // indexers hold it only briefly: retry a few times before reporting held.
+                sharing_retries += 1;
+                if sharing_retries > 5 {
+                    return Err(io::Error::new(io::ErrorKind::WouldBlock, held_msg));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                continue;
             }
             Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
                 // Transient STATUS_DELETE_PENDING while previous holder closes its handle.

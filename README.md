@@ -108,33 +108,11 @@ vcopy --exclude-from .gitignore /home/user/code /mnt/usb/backup
 ---
 
 ### 5. Zero-Obfuscation Configuration Files (`-c / --config`)
-No separate manual or syntax to learn! A configuration file can literally contain the **exact same command-line flags and parameters** you already type in the terminal:
-
+Reuse your exact CLI flags, key-value pairs, TOML, or JSON in a config file:
 ```bash
 vcopy -c backup.conf
 ```
-
-**Direct CLI arguments format (`backup.conf`):**
-```text
-# backup.conf - exact same flags as the command line!
---sources /home/user/documents
---sources /home/user/photos
---dest /mnt/usb/backup
---flat
---perms
---daily 7
---weekly 4
-```
-
-**Simple key-value format (`backup.conf`):**
-```text
-dest = /mnt/usb/backup
-sources = /home/user/documents, /home/user/photos
-flat = true
-perms = true
-daily = 7
-weekly = 4
-```
+See [Configuration Files](#configuration-files-zero-obfuscation) below for supported formats.
 
 ---
 
@@ -178,7 +156,7 @@ vcopy restore -p -t 2026-11-09_083000 /mnt/usb/backup /tmp/restored
 ---
 
 ### 8. Integrity Verification & Bit-Rot Detection (`vcopy verify` / `check`)
-Verify destination files against recorded SIMD CRC32 checksums to detect disk corruption, bit-rot, or tampering:
+Verify destination files against recorded SIMD CRC32 checksums to detect disk corruption or bit-rot:
 
 ```bash
 # Full verification: recomputes CRC32 checksums for live mirror and historical snapshots
@@ -454,7 +432,7 @@ Ideal when you need all files in a single flat folder (e.g. flat USB drives, pho
 
 * **Zero Links**: Never creates or follows hardlinks, symlinks, or block reflinks. Operates safely across FAT32, exFAT, external USB drives, and cloud-synced folders.
 * **Directly Browseable Destination**: Live mirror files remain raw, uncompressed, and directly readable in any standard OS file manager without proprietary archive extractors.
-* **Atomic Staging Writes & 3-Tier Streaming Cache Management**: Writes all file copies and manifests through temporary files (`.<file>.tmp.<pid>.<id>`) and atomically renames them into place to prevent corruption upon abrupt power loss or cancellation. Streams file payloads explicitly in userspace (no `copy_file_range` reflinks) across three tiers: a `64 KiB` stack buffer for small files (`< 1 MiB`), a synchronous `1 MiB` heap buffer (`1–2 MiB`), and a decoupled persistent single-writer `3 × 1 MiB` ring-buffer pipeline (`>= 2 MiB`, serialized to avoid multi-stream seek thrashing) with best-effort preallocation and platform cache hints (Linux `fallocate` + `POSIX_FADV_SEQUENTIAL`/`NOREUSE`/rolling 1 MiB `DONTNEED`; Windows `FILE_FLAG_SEQUENTIAL_SCAN` + `set_len`).
+* **Atomic Staging Writes & 3-Tier Streaming Cache Management**: Writes all file copies and manifests through temporary files (`.<file>.tmp.<pid>.<id>`) and atomically renames them into place to prevent partial-file corruption upon interruption. Metadata manifests (`baseline.json`, `manifest.json`, `.version-history.manifest.jsonl`) get a best-effort `sync_all()` before rename, whereas copied data files and parent directories are intentionally not `fsync`ed, for throughput on external/USB drives. This relies on atomic rename and OS page-cache writeback, so abrupt power loss before the OS flushes can leave recently copied files incomplete; run `vcopy verify` after an unclean shutdown. Streams file payloads explicitly in userspace (no `copy_file_range` reflinks) across three tiers: a `64 KiB` stack buffer for small files (`< 1 MiB`), a synchronous `1 MiB` heap buffer (`1–2 MiB`), and a decoupled persistent single-writer `3 × 1 MiB` ring-buffer pipeline (`>= 2 MiB`, serialized to avoid multi-stream seek thrashing) with best-effort preallocation and platform cache hints (Linux `fallocate` + `POSIX_FADV_SEQUENTIAL`/`NOREUSE`/rolling 1 MiB `DONTNEED`; Windows `FILE_FLAG_SEQUENTIAL_SCAN` + `set_len`).
 * **Nanosecond Timestamps & SIMD CRC32**: Overcomes FAT/exFAT 2-second timestamp drift by persisting exact nanosecond modification timestamps (`mtime_ns`) and fast SIMD CRC32 hashes in metadata manifests.
 * **Safety Circuit Breakers & Path Guards**:
   * **100% Deletion Wipeout Prevention**: If source path is empty, unmounted, or yields 0 files while the destination contains existing files, `vcopy` refuses to wipe the destination, aborting with a safety error unless explicitly overridden with `--allow-empty-source` or `-F / --force`.
@@ -463,6 +441,15 @@ Ideal when you need all files in a single flat folder (e.g. flat USB drives, pho
 * **Heuristic Orphan Scan Recovery**: If metadata files (`manifest.json`, `baseline.json`, or `.version-history.manifest.jsonl`) are deleted or corrupted, `vcopy` automatically scans disk, reconstructs snapshots from displaced files, `.deleted` markers, and `.v<N>` version numbers, restoring point-in-time recovery capabilities in both hierarchical and flat modes.
 * **Safe Pruning (Reverse-Delta Consolidation)**: Pruning intermediate snapshots migrates displaced files needed by surviving older snapshots before deletion, guaranteeing point-in-time restore integrity across GFS retention cycles.
 * **Non-Blocking Resilient Advisory Locking**: Uses advisory locking (`.version-history/.lock` or `.version-history.lock`, removed automatically on completion) to block overlapping concurrent runs, falling back automatically to an atomic PID-file lock on filesystems that do not support POSIX `flock` (e.g. FUSE mounts).
+
+### Filesystem & Platform Limits
+
+Because `vcopy` writes standard files directly to the target filesystem without a container format, destination filesystem rules apply:
+* **FAT32:** 4 GiB maximum individual file size.
+* **FAT / exFAT / NTFS:** Reserved filename characters (`: ? * " < > |`) and trailing dots or spaces are invalid.
+* **Case-insensitive targets (exFAT, NTFS, APFS):** Source files differing only by case (e.g. `A.txt` and `a.txt` on ext4) will collide on case-insensitive destinations.
+* **Unicode normalization:** Normalization differs across filesystems (e.g. APFS NFD vs. Linux ext4 NFC), which can affect cross-OS filename matching.
+* **Windows paths:** Standard Windows `MAX_PATH` limits may apply unless long-path support is enabled in the OS.
 
 ---
 
