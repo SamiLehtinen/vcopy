@@ -2305,3 +2305,59 @@ fn test_command_and_parameter_suggestions() {
         .unwrap()
         .success());
 }
+
+#[test]
+fn test_large_and_mixed_tier_end_to_end_backup_and_verify() {
+    let ctx = TestContext::new("large_mixed_tiers");
+
+    let make_data = |len: usize, salt: usize| -> Vec<u8> {
+        let mut buf = vec![0u8; len];
+        for (i, b) in buf.iter_mut().enumerate() {
+            *b = ((i.wrapping_mul(31 + salt) ^ (i >> 8)) & 0xff) as u8;
+        }
+        buf
+    };
+
+    let small_v1 = make_data(37 * 1024, 1);
+    let medium_v1 = make_data(1024 * 1024 + 1234, 2);
+    let large_v1 = make_data(3 * 1024 * 1024 + 7777, 3);
+
+    ctx.write_src_file("small.bin", &small_v1);
+    ctx.write_src_file("medium.bin", &medium_v1);
+    ctx.write_src_file("large.bin", &large_v1);
+
+    let st1 = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st1.success());
+
+    assert_eq!(fs::read(ctx.dst.join("small.bin")).unwrap(), small_v1);
+    assert_eq!(fs::read(ctx.dst.join("medium.bin")).unwrap(), medium_v1);
+    assert_eq!(fs::read(ctx.dst.join("large.bin")).unwrap(), large_v1);
+
+    // Modify large.bin and small.bin for a second snapshot
+    thread::sleep(Duration::from_millis(1050));
+    let small_v2 = make_data(12 * 1024 + 9, 4);
+    let large_v2 = make_data(2 * 1024 * 1024 + 4096, 5);
+    ctx.write_src_file("small.bin", &small_v2);
+    ctx.write_src_file("large.bin", &large_v2);
+
+    let st2 = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg(&ctx.src)
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(st2.success());
+
+    assert_eq!(fs::read(ctx.dst.join("small.bin")).unwrap(), small_v2);
+    assert_eq!(fs::read(ctx.dst.join("large.bin")).unwrap(), large_v2);
+
+    let verify = Command::new(env!("CARGO_BIN_EXE_vcopy"))
+        .arg("verify")
+        .arg(&ctx.dst)
+        .status()
+        .unwrap();
+    assert!(verify.success());
+}

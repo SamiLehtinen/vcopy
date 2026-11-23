@@ -322,8 +322,8 @@ All files (live files, disambiguated sources, and numbered versions) reside in a
    Never creates or follows hardlinks, symlinks, or block reflinks. Destination mirrors are 100% portable and fully compatible with FAT32, exFAT, NTFS, ext4, and cloud storage providers.
 2. **Directly Browseable Uncompressed Files**:
    Live mirror files and historical versions are stored as standard, uncompressed files readable by any file explorer or utility without special tools.
-3. **Atomic Staging Writes & Streaming Cache Management**:
-   All files and metadata manifests are written to temporary staging files (`.<file>.tmp.<pid>.<id>`) and renamed into place atomically to protect against power loss or mid-process termination. File copies stream explicitly in userspace (1 MiB buffer for files `>= 1 MiB`) with best-effort preallocation and platform cache hints (Linux `fallocate` + `POSIX_FADV_SEQUENTIAL`/`NOREUSE`/rolling 1 MiB `DONTNEED`; Windows `FILE_FLAG_SEQUENTIAL_SCAN` + `set_len`) to avoid dirty-page flush stalls.
+3. **Atomic Staging Writes & 3-Tier Streaming Cache Management**:
+   All files and metadata manifests are written to temporary staging files (`.<file>.tmp.<pid>.<id>`) and renamed into place atomically to protect against power loss or mid-process termination. File copies stream explicitly in userspace (`64 KiB` stack buffer for `< 1 MiB`, synchronous `1 MiB` heap buffer for `1-2 MiB`, and a decoupled persistent single-writer `3 x 1 MiB` ring-buffer pipeline for `>= 2 MiB`) with best-effort preallocation and platform cache hints (Linux `fallocate` + `POSIX_FADV_SEQUENTIAL`/`NOREUSE`/rolling 1 MiB `DONTNEED`; Windows `FILE_FLAG_SEQUENTIAL_SCAN` + `set_len`) to avoid dirty-page flush stalls.
 4. **Nanosecond Timestamps & SIMD CRC32**:
    FAT32 and exFAT store timestamps with 2-second resolution drift. `vcopy` calculates exact nanosecond modification times and fast SIMD-accelerated CRC32 hashes stored in `manifest.json` to prevent unnecessary recopying.
 5. **Reverse-Delta Pruning Consolidation**:

@@ -1,8 +1,10 @@
 use std::fs::{self, File, FileTimes};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::copy_pipeline::CopyPipeline;
 use crate::models::SourceMapping;
 
 pub fn compute_file_crc32(path: &Path) -> io::Result<u32> {
@@ -659,8 +661,14 @@ pub fn set_file_mtime(path: &Path, mtime: SystemTime) -> std::io::Result<()> {
 const SMALL_COPY_BUF_SIZE: usize = 64 * 1024;
 const LARGE_COPY_BUF_SIZE: usize = 1024 * 1024; // 1 MiB
 const LARGE_FILE_THRESHOLD: u64 = 1024 * 1024; // 1 MiB
+const PIPELINE_RING_SLOTS: usize = 3; // 3 MiB reusable heap ring
+const PIPELINE_FILE_THRESHOLD: u64 = 2 * 1024 * 1024; // 2 MiB (at least 2 full blocks)
 #[cfg(target_os = "linux")]
-const FADVISE_WINDOW_BYTES: u64 = LARGE_COPY_BUF_SIZE as u64; // 1 MiB rolling DONTNEED window
+pub(crate) const FADVISE_WINDOW_BYTES: u64 = LARGE_COPY_BUF_SIZE as u64; // 1 MiB rolling DONTNEED window
+
+// Deliberate single-writer serialization for >= 2 MiB copies: avoids HDD/USB/SMR
+// multi-stream seek thrashing and bounds ring memory to one 3 MiB allocation.
+static COPY_PIPELINE: OnceLock<Mutex<Option<CopyPipeline<File>>>> = OnceLock::new();
 
 fn open_src_for_copy(src: &Path, is_large: bool) -> io::Result<File> {
     let mut opts = fs::OpenOptions::new();
@@ -699,7 +707,7 @@ fn advise_sequential_noreuse(file: &File) {
 }
 
 #[cfg(target_os = "linux")]
-fn advise_dontneed(file: &File, offset: u64, len: u64) {
+pub(crate) fn advise_dontneed(file: &File, offset: u64, len: u64) {
     if len == 0 {
         return;
     }
@@ -741,35 +749,12 @@ fn preallocate_file(_file: &File, _size: u64) -> bool {
     false
 }
 
-fn copy_stream(
+fn copy_stream_large_sync(
     reader: &mut File,
-    writer: &mut File,
+    mut writer: File,
     src_size: u64,
-    is_large: bool,
-) -> io::Result<u64> {
-    if !is_large {
-        let mut buf = [0u8; SMALL_COPY_BUF_SIZE];
-        let mut total = 0u64;
-        loop {
-            let n = match reader.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => n,
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                Err(e) => return Err(e),
-            };
-            writer.write_all(&buf[..n])?;
-            total += n as u64;
-        }
-        return Ok(total);
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        advise_sequential_noreuse(reader);
-        advise_sequential_noreuse(writer);
-    }
-
-    let preallocated = preallocate_file(writer, src_size);
+    preallocated: bool,
+) -> io::Result<(File, u64)> {
     let mut buf = vec![0u8; LARGE_COPY_BUF_SIZE];
     let mut total = 0u64;
     #[cfg(target_os = "linux")]
@@ -788,7 +773,7 @@ fn copy_stream(
         #[cfg(target_os = "linux")]
         while total - dropped >= FADVISE_WINDOW_BYTES {
             advise_dontneed(reader, dropped, FADVISE_WINDOW_BYTES);
-            advise_dontneed(writer, dropped, FADVISE_WINDOW_BYTES);
+            advise_dontneed(&writer, dropped, FADVISE_WINDOW_BYTES);
             dropped += FADVISE_WINDOW_BYTES;
         }
     }
@@ -802,10 +787,84 @@ fn copy_stream(
     if total > dropped {
         let rem = total - dropped;
         advise_dontneed(reader, dropped, rem);
-        advise_dontneed(writer, dropped, rem);
+        advise_dontneed(&writer, dropped, rem);
     }
 
-    Ok(total)
+    Ok((writer, total))
+}
+
+fn copy_stream(
+    reader: &mut File,
+    mut writer: File,
+    src_size: u64,
+    is_large: bool,
+) -> io::Result<(File, u64)> {
+    // Tier 1 (< 1 MiB): synchronous 64 KiB stack buffer, zero heap allocs or threads.
+    if !is_large {
+        let mut buf = [0u8; SMALL_COPY_BUF_SIZE];
+        let mut total = 0u64;
+        loop {
+            let n = match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
+            };
+            writer.write_all(&buf[..n])?;
+            total += n as u64;
+        }
+        return Ok((writer, total));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        advise_sequential_noreuse(reader);
+        advise_sequential_noreuse(&writer);
+    }
+
+    let preallocated = preallocate_file(&writer, src_size);
+
+    // Tier 2 (1 MiB .. 2 MiB): synchronous 1 MiB heap buffer with full hints & preallocation.
+    if src_size < PIPELINE_FILE_THRESHOLD {
+        return copy_stream_large_sync(reader, writer, src_size, preallocated);
+    }
+
+    // Tier 3 (>= 2 MiB): persistent single-writer 3-slot ring-buffer pipeline.
+    let mutex = COPY_PIPELINE.get_or_init(|| Mutex::new(None));
+    let mut guard = match mutex.lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            let mut g = poisoned.into_inner();
+            *g = None;
+            g
+        }
+    };
+
+    if guard.as_ref().is_some_and(|p| p.is_dead()) {
+        *guard = None;
+    }
+
+    if guard.is_none() {
+        match CopyPipeline::try_new(LARGE_COPY_BUF_SIZE, PIPELINE_RING_SLOTS) {
+            Ok(p) => *guard = Some(p),
+            Err(_) => {
+                // Graceful fallback if OS refuses thread creation (e.g. EAGAIN/ENOMEM).
+                drop(guard);
+                return copy_stream_large_sync(reader, writer, src_size, preallocated);
+            }
+        }
+    }
+
+    let res = guard
+        .as_mut()
+        .expect("pipeline initialized above")
+        .copy_file(reader, writer, src_size, preallocated);
+
+    if guard.as_ref().is_some_and(|p| p.is_dead()) {
+        *guard = None;
+    }
+
+    res
 }
 
 pub fn copy_atomic(src: &Path, dst: &Path, pid: u32, counter: u64) -> std::io::Result<u64> {
@@ -826,13 +885,12 @@ pub fn copy_atomic(src: &Path, dst: &Path, pid: u32, counter: u64) -> std::io::R
     // Copy via explicit userspace streaming rather than fs::copy/io::copy so that:
     // 1. Restrictive OS permissions (chmod 0444 / readonly) are not applied to backup mirror files.
     // 2. Same-filesystem copy_file_range reflinks cannot occur (preserving the zero-links invariant).
-    // 3. Large files use a 1 MiB buffer with preallocation and platform cache hints
-    //    (rolling 1 MiB POSIX_FADV_DONTNEED on Linux, FILE_FLAG_SEQUENTIAL_SCAN on Windows) to
-    //    prevent dirty-page flush stalls.
+    // 3. Large files use 3-tier streaming: 64 KiB stack (< 1 MiB), 1 MiB sync (1..2 MiB), or the
+    //    decoupled 3x1 MiB ring-buffer pipeline (>= 2 MiB) with preallocation and platform cache hints.
     let copy_res = (|| -> std::io::Result<u64> {
         let mut reader = open_src_for_copy(src, is_large)?;
-        let mut writer = create_dst_for_copy(&tmp_path, is_large)?;
-        let bytes = copy_stream(&mut reader, &mut writer, src_size, is_large)?;
+        let writer = create_dst_for_copy(&tmp_path, is_large)?;
+        let (writer, bytes) = copy_stream(&mut reader, writer, src_size, is_large)?;
         // Preserve modified timestamp on the already-open handle before closing
         if let Some(ref meta) = src_meta {
             if let Ok(mtime) = meta.modified() {
@@ -1328,10 +1386,10 @@ mod tests {
         fs::write(&shrink_src, &actual_data).unwrap();
         {
             let mut r = open_src_for_copy(&shrink_src, true).unwrap();
-            let mut w = create_dst_for_copy(&shrink_dst, true).unwrap();
+            let w = create_dst_for_copy(&shrink_dst, true).unwrap();
             // Simulate src_size being larger than actual bytes read (concurrent shrink)
             let inflated_size = actual_data.len() as u64 + 2 * 1024 * 1024;
-            let written = copy_stream(&mut r, &mut w, inflated_size, true).unwrap();
+            let (_w, written) = copy_stream(&mut r, w, inflated_size, true).unwrap();
             assert_eq!(written, actual_data.len() as u64);
         }
         assert_eq!(
@@ -1352,6 +1410,214 @@ mod tests {
                 "leftover temp file after error: {}",
                 name
             );
+        }
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_copy_atomic_pipeline_threshold_boundaries() {
+        let base =
+            std::env::temp_dir().join(format!("vcopy_threshold_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+
+        let sizes = [
+            ("below_2m.bin", PIPELINE_FILE_THRESHOLD as usize - 1),
+            ("exact_2m.bin", PIPELINE_FILE_THRESHOLD as usize),
+            ("above_2m.bin", PIPELINE_FILE_THRESHOLD as usize + 1),
+        ];
+
+        let pid = std::process::id();
+        for (idx, (name, size)) in sizes.iter().enumerate() {
+            let src = base.join(format!("src_{}", name));
+            let dst = base.join("out").join(name);
+            let mut data = vec![0u8; *size];
+            for (i, b) in data.iter_mut().enumerate() {
+                *b = ((i.wrapping_mul(17) ^ (i >> 9)) & 0xff) as u8;
+            }
+            fs::write(&src, &data).unwrap();
+
+            let copied = copy_atomic(&src, &dst, pid, idx as u64).unwrap();
+            assert_eq!(copied, *size as u64);
+            assert_eq!(
+                compute_file_crc32(&src).unwrap(),
+                compute_file_crc32(&dst).unwrap(),
+                "CRC32 mismatch for {}",
+                name
+            );
+        }
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_copy_pipeline_deterministic_concurrent_shrink() {
+        use crate::copy_pipeline::PipelineSource;
+
+        struct TruncatingSource {
+            file: File,
+            src_path: PathBuf,
+            new_len: u64,
+            chunks_read: usize,
+            truncated: bool,
+        }
+
+        impl Read for TruncatingSource {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                let n = self.file.read(buf)?;
+                if n > 0 {
+                    self.chunks_read += 1;
+                    if self.chunks_read == 1 && !self.truncated {
+                        // Truncate source file on disk mid-copy after chunk 1
+                        let f = fs::OpenOptions::new()
+                            .write(true)
+                            .open(&self.src_path)
+                            .unwrap();
+                        f.set_len(self.new_len).unwrap();
+                        self.truncated = true;
+                    }
+                }
+                Ok(n)
+            }
+        }
+
+        impl PipelineSource for TruncatingSource {
+            #[cfg(target_os = "linux")]
+            fn advise_dontneed(&self, offset: u64, len: u64) {
+                advise_dontneed(&self.file, offset, len);
+            }
+        }
+
+        let base = std::env::temp_dir().join(format!(
+            "vcopy_concurrent_shrink_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+
+        let initial_size = (2 * 1024 * 1024) + (256 * 1024);
+        let shrunk_size = (1024 * 1024) + 12_345;
+        let mut data = vec![0u8; initial_size];
+        for (i, b) in data.iter_mut().enumerate() {
+            *b = ((i.wrapping_mul(29) ^ (i >> 7)) & 0xff) as u8;
+        }
+
+        let src_path = base.join("src_shrink.bin");
+        let dst_path = base.join("dst_shrink.bin");
+        fs::write(&src_path, &data).unwrap();
+
+        let mut pipeline =
+            CopyPipeline::<File>::try_new(LARGE_COPY_BUF_SIZE, PIPELINE_RING_SLOTS).unwrap();
+        let src_file = open_src_for_copy(&src_path, true).unwrap();
+        let dst_file = create_dst_for_copy(&dst_path, true).unwrap();
+        let preallocated = preallocate_file(&dst_file, initial_size as u64);
+
+        let mut wrapper = TruncatingSource {
+            file: src_file,
+            src_path: src_path.clone(),
+            new_len: shrunk_size as u64,
+            chunks_read: 0,
+            truncated: false,
+        };
+
+        let (dst_file, written) = pipeline
+            .copy_file(&mut wrapper, dst_file, initial_size as u64, preallocated)
+            .unwrap();
+        drop(dst_file);
+
+        assert!(wrapper.truncated);
+        assert_eq!(written, shrunk_size as u64);
+        assert_eq!(fs::metadata(&dst_path).unwrap().len(), shrunk_size as u64);
+        assert_eq!(
+            compute_file_crc32(&src_path).unwrap(),
+            compute_file_crc32(&dst_path).unwrap()
+        );
+        assert_eq!(fs::read(&dst_path).unwrap(), &data[..shrunk_size]);
+
+        drop(wrapper);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_copy_atomic_concurrent_threads_serialize_cleanly() {
+        let base = std::env::temp_dir().join(format!(
+            "vcopy_concurrent_copy_atomic_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("out")).unwrap();
+
+        let sizes = [
+            32 * 1024,
+            1500 * 1024,
+            2 * 1024 * 1024 + 512,
+            3 * 1024 * 1024 + 4096,
+        ];
+
+        let mut handles = Vec::new();
+        let pid = std::process::id();
+        for (tid, &size) in sizes.iter().enumerate() {
+            let src = base.join(format!("src_{}.bin", tid));
+            let dst = base.join("out").join(format!("dst_{}.bin", tid));
+            let mut data = vec![0u8; size];
+            for (i, b) in data.iter_mut().enumerate() {
+                *b = ((i.wrapping_mul(13 + tid) ^ (i >> 6)) & 0xff) as u8;
+            }
+            fs::write(&src, &data).unwrap();
+            let expected_crc = compute_file_crc32(&src).unwrap();
+
+            handles.push(std::thread::spawn(move || {
+                let copied = copy_atomic(&src, &dst, pid, tid as u64).unwrap();
+                assert_eq!(copied, size as u64);
+                assert_eq!(compute_file_crc32(&dst).unwrap(), expected_crc);
+            }));
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        for entry in fs::read_dir(base.join("out")).unwrap() {
+            let name = entry.unwrap().file_name().to_string_lossy().to_string();
+            assert!(!name.contains(".tmp."), "leftover temp file: {}", name);
+        }
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_copy_atomic_50_mixed_sequential_files() {
+        let base = std::env::temp_dir().join(format!("vcopy_50_mixed_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("out")).unwrap();
+
+        let pid = std::process::id();
+        for idx in 0..55usize {
+            let size = match idx % 3 {
+                0 => (idx * 7919) % (512 * 1024),                     // Tier 1
+                1 => LARGE_FILE_THRESHOLD as usize + (idx * 1024),    // Tier 2
+                _ => PIPELINE_FILE_THRESHOLD as usize + (idx * 4096), // Tier 3
+            };
+            let src = base.join(format!("src_{}.bin", idx));
+            let dst = base.join("out").join(format!("dst_{}.bin", idx));
+            let mut data = vec![0u8; size];
+            for (i, b) in data.iter_mut().enumerate() {
+                *b = ((i.wrapping_mul(23 + (idx % 7)) ^ (i >> 8)) & 0xff) as u8;
+            }
+            fs::write(&src, &data).unwrap();
+
+            let copied = copy_atomic(&src, &dst, pid, idx as u64).unwrap();
+            assert_eq!(copied, size as u64);
+            assert_eq!(
+                compute_file_crc32(&src).unwrap(),
+                compute_file_crc32(&dst).unwrap()
+            );
+        }
+
+        for entry in fs::read_dir(base.join("out")).unwrap() {
+            let name = entry.unwrap().file_name().to_string_lossy().to_string();
+            assert!(!name.contains(".tmp."), "leftover temp file: {}", name);
         }
 
         let _ = fs::remove_dir_all(&base);

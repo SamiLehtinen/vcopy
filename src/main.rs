@@ -4,6 +4,7 @@ use std::process;
 use clap::{Parser, Subcommand};
 
 mod config;
+mod copy_pipeline;
 mod exclude;
 mod history;
 mod lock;
