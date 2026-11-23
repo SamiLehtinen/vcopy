@@ -95,10 +95,38 @@ jobs:
             shasum -a 256 "${{ matrix.asset_name }}" > "${{ matrix.asset_name }}.sha256"
           fi
 
+      - name: Extract Release Notes
+        id: release_notes
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          HEADER=$(grep -E "^## \\[${VERSION}\\]" CHANGELOG.md | head -n 1 || true)
+          SUBTITLE=""
+          if [[ "$HEADER" == *" — "* ]]; then
+            SUBTITLE="${HEADER#* — }"
+          fi
+          if [ -n "$SUBTITLE" ]; then
+            echo "title=${TAG} — ${SUBTITLE}" >> "$GITHUB_OUTPUT"
+          else
+            echo "title=${TAG}" >> "$GITHUB_OUTPUT"
+          fi
+          awk -v ver="$VERSION" '
+            $0 ~ "^## \\[" ver "\\]" { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > release_notes.md
+          if [ ! -s release_notes.md ]; then
+            echo "Release ${TAG}" > release_notes.md
+          fi
+
       - name: Publish Release Assets
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v3
         with:
+          name: ${{ steps.release_notes.outputs.title }}
+          body_path: release_notes.md
           files: |
             ${{ matrix.asset_name }}
             ${{ matrix.asset_name }}.sha256

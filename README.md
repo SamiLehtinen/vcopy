@@ -498,6 +498,7 @@ cargo test
 
 ## Documentation & Developer Resources
 
+* [Changelog (`CHANGELOG.md`)](CHANGELOG.md): Version-by-version release notes and change history.
 * [User Manual (`docs/MANUAL.md`)](docs/MANUAL.md): Comprehensive Markdown user guide (also embedded in the binary via `vcopy --manual-markdown`).
 * [UNIX Man Page (`docs/vcopy.1`)](docs/vcopy.1): Standard troff man page for Unix/Linux man systems.
 * [Engineering Specification (`docs/spec.md`)](docs/spec.md): Complete architecture specification, data schema, collision disambiguation, scan recovery, and verification details.
