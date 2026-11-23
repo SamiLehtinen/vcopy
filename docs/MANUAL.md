@@ -14,6 +14,14 @@ vcopy --manual | --manual-markdown
 
 ---
 
+## DESIGN SCOPE & INTENDED USE
+
+`vcopy` is built for everyday users and standard file trees consisting mostly of static files (documents, photos, media, source trees, personal archives) with a smaller subset of regularly updated small-to-medium files, where **direct browseability without proprietary extractors** on exFAT, FAT32, NTFS, ext4, or APFS drives is paramount.
+
+**Out of scope:** `vcopy` is not intended for live or large databases, virtual machine disk images, or huge multi-gigabyte files that receive frequent small in-place edits. Because `vcopy` stores whole, uncompressed files without block-level deduplication or binary delta patching, modifying a small slice of a huge file re-copies and archives the entire file.
+
+---
+
 ## QUICK START & SIMPLE EXAMPLES
 
 ### 1. Basic Single Directory Backup

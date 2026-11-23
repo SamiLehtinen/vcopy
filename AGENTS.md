@@ -6,7 +6,7 @@ This document provides architectural context, development workflows, and core in
 
 ## 1. Project Overview & System Invariants
 
-`vcopy` is a zero-dependency, cross-platform CLI backup and filesystem synchronization tool written in pure Rust. It creates directly browseable, uncompressed, link-free filesystem mirrors with full historical point-in-time recovery, optimized for non-snapshotting filesystems (exFAT, FAT32, NTFS, ext4, APFS).
+`vcopy` is a cross-platform CLI backup and filesystem synchronization tool written in pure Rust and distributed as a single static binary with zero runtime dependencies. It creates directly browseable, uncompressed, link-free filesystem mirrors with full historical point-in-time recovery, optimized for non-snapshotting filesystems (exFAT, FAT32, NTFS, ext4, APFS).
 
 ### Non-Negotiable System Invariants
 * **Zero Links:** Never create or follow hardlinks, symlinks, or block reflinks. Destination mirrors must be completely link-free.
@@ -106,4 +106,4 @@ cross build --release --target aarch64-unknown-linux-musl
     git config user.name "Sami Lehtinen"
     git config user.email "noreply@sami-lehtinen.net"
     ```
-* **Pure Rust:** Do not add dependencies that require native C libraries or external non-Rust build tools. Keep binaries static and zero-dependency.
+* **Pure Rust:** Do not add dependencies that require native C libraries or external non-Rust build tools. Keep binaries static with zero runtime dependencies and no native C library dependencies.

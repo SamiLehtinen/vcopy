@@ -8,7 +8,7 @@
 
 ## 1. Overview & System Invariants
 
-`vcopy` is a zero-dependency, cross-platform CLI backup and filesystem synchronization tool written in pure Rust. It creates directly browseable, uncompressed, link-free filesystem mirrors with full historical point-in-time recovery, optimized for non-snapshotting filesystems (exFAT, FAT32, NTFS, ext4, APFS).
+`vcopy` is a cross-platform CLI backup and filesystem synchronization tool written in pure Rust and distributed as a single static binary with zero runtime dependencies. It creates directly browseable, uncompressed, link-free filesystem mirrors with full historical point-in-time recovery, optimized for non-snapshotting filesystems (exFAT, FAT32, NTFS, ext4, APFS).
 
 `vcopy` supports two primary operational layouts:
 1. **Hierarchical Snapshot Mode (Default):** Live browseable mirror in the root destination directory, with displaced previous file revisions archived under dated snapshot directories in `.version-history/<YYYY-MM-DD_HHMMSS>/`.
@@ -30,6 +30,10 @@
   * Enforces strict validation before removing snapshot directories during pruning (requiring 17-byte `YYYY-MM-DD_HHMMSS` format, direct parent containment, and non-symlink verification).
 * **Heuristic Orphan Scan Recovery:** In both flat and hierarchical modes, missing or destroyed metadata manifests (`manifest.json`, `baseline.json`, `.version-history.manifest.jsonl`) are automatically reconstructed on-the-fly by scanning filesystem contents, `.deleted` markers, and `.v<N>` version numbers.
 * **Non-Blocking Resilient Advisory Locking:** Modifying target paths requires an exclusive advisory lock on `.version-history/.lock` (or `.version-history.lock` in flat mode). Lock files are transient and automatically removed when the operation completes. If the underlying filesystem (e.g., exFAT FUSE) does not support POSIX `flock`/`fcntl`, it automatically cleans up the probe lock file and falls back to an atomic PID-file locking mechanism (`.version-history/.pid_lock`).
+
+### Out-of-Scope Workloads
+
+`vcopy` is designed for standard user file trees (mostly static documents, photos, media, source trees, and archives, plus regularly updated small-to-medium files) where direct, extractor-free browseability is required. It intentionally stores whole, uncompressed files without chunk-level deduplication or binary delta patching. Consequently, it is **not** intended for live or large databases, virtual machine disk images, or huge multi-gigabyte files undergoing frequent small in-place edits, where updating a small region would re-copy and archive the entire file.
 
 ---
 

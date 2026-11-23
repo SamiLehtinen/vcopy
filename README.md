@@ -7,9 +7,14 @@
 
 **Directly browseable, zero-link, multi-platform file sync with snapshot history.**
 
-`vcopy` is a lightweight, zero-dependency CLI backup tool written in pure Rust. It creates directly browseable, uncompressed filesystem mirrors on external drives and non-snapshotting filesystems (exFAT, FAT32, NTFS, ext4, APFS) while preserving a full historical change record.
+`vcopy` is a lightweight, self-contained CLI backup tool written in pure Rust with zero runtime dependencies (distributed as a single static binary). It creates directly browseable, uncompressed filesystem mirrors on external drives and non-snapshotting filesystems (exFAT, FAT32, NTFS, ext4, APFS) while preserving a full historical change record.
 
 The binary embeds its complete documentation in both plain text and Markdown formats, enabling full standalone operation without external manuals or extra files.
+
+### Who Is `vcopy` For? (Design Scope)
+
+* **Best suited for:** Everyday users and standard file trees consisting mostly of static files (documents, photos, media, source trees, personal archives) with a smaller subset of regularly updated small-to-medium files, where **direct browseability without proprietary extractors** on exFAT, FAT32, NTFS, ext4, or APFS drives is paramount.
+* **Not intended for:** Live or large databases, virtual machine disk images, or huge multi-gigabyte files that receive frequent small in-place edits. Because `vcopy` stores whole, uncompressed files to keep mirrors directly readable without block-level deduplication or binary delta patching, changing a small slice of a huge file re-copies and archives the entire file. Tools built around chunk deduplication or database-native WAL/replication backups are the right choice for those workloads.
 
 ---
 
@@ -475,6 +480,8 @@ Pre-compiled standalone static binaries for release `v0.3.4` are available on th
 | **macOS** | Intel (x86_64) | `x86_64-apple-darwin` | `vcopy` |
 
 ### Building from Source
+
+`vcopy` builds purely from Rust crates with no native C library dependencies, producing a self-contained binary with zero runtime dependencies (static `musl` on Linux). Because it has no C/C++ build dependencies, building natively on additional architectures not included in pre-built GitHub Releases (such as Linux `riscv64`) works directly via `cargo build --release`.
 
 Ensure you have Rust 1.75+ installed:
 

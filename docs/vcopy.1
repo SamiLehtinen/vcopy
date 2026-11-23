@@ -18,7 +18,9 @@ vcopy \- directly browseable, zero-link, multi-platform backup and sync tool wit
 \fB\-\-manual\fR | \fB\-\-manual-markdown\fR
 .SH DESCRIPTION
 .B vcopy
-is a lightweight, zero-dependency CLI backup and filesystem synchronization tool written in pure Rust. It creates directly browseable, uncompressed filesystem mirrors on external drives and non-snapshotting filesystems (exFAT, FAT32, NTFS, ext4, APFS) while preserving a full historical point-in-time change record.
+is a lightweight, self-contained CLI backup and filesystem synchronization tool written in pure Rust with zero runtime dependencies. It creates directly browseable, uncompressed filesystem mirrors on external drives and non-snapshotting filesystems (exFAT, FAT32, NTFS, ext4, APFS) while preserving a full historical point-in-time change record.
+.PP
+It is designed for standard file trees (documents, photos, media, source trees, and archives) where direct browseability without proprietary extractors is paramount. Because it stores whole, uncompressed files without chunk deduplication or binary delta patching, it is not intended for live databases, VM disk images, or huge multi-gigabyte files with frequent small in-place edits.
 .PP
 The binary embeds its complete documentation in both plain text and Markdown formats, enabling standalone operation without external files.
 .SH QUICK START & SIMPLE EXAMPLES
