@@ -23,11 +23,13 @@ impl Drop for BackupLock {
                 }
                 #[cfg(not(unix))]
                 {
+                    let _ = path;
+                    // On Windows, the lock handle is opened with share_mode(0) and
+                    // FILE_FLAG_DELETE_ON_CLOSE, so dropping the handle atomically
+                    // releases the exclusive lock and deletes the file.
                     if let Some(f) = file.take() {
-                        let _ = f.unlock();
                         drop(f);
                     }
-                    let _ = fs::remove_file(path);
                 }
             }
             BackupLock::PidFile { path } => {
@@ -51,6 +53,7 @@ pub fn acquire_flat_lock(dest: &Path) -> io::Result<BackupLock> {
     )
 }
 
+#[cfg(not(windows))]
 fn is_same_inode(file: &File, lock_path: &Path) -> bool {
     #[cfg(unix)]
     {
@@ -69,6 +72,60 @@ fn is_same_inode(file: &File, lock_path: &Path) -> bool {
     }
 }
 
+#[cfg(windows)]
+fn acquire_advisory_with_fallback<F>(
+    lock_path: PathBuf,
+    held_msg: &str,
+    pid_fallback: F,
+) -> io::Result<BackupLock>
+where
+    F: FnOnce() -> io::Result<BackupLock>,
+{
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_FLAG_DELETE_ON_CLOSE: u32 = 0x0400_0000;
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+
+    for _ in 0..16 {
+        let mut open_opts = OpenOptions::new();
+        open_opts
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            // share_mode(0) makes opening the file an atomic OS-level exclusive lock.
+            // FILE_FLAG_DELETE_ON_CLOSE deletes the lock file when the sole handle closes.
+            .share_mode(0)
+            .custom_flags(FILE_FLAG_DELETE_ON_CLOSE);
+
+        match open_opts.open(&lock_path) {
+            Ok(file) => {
+                return Ok(BackupLock::Advisory {
+                    file: Some(file),
+                    path: lock_path,
+                });
+            }
+            Err(e) if e.raw_os_error() == Some(ERROR_SHARING_VIOLATION) => {
+                return Err(io::Error::new(io::ErrorKind::WouldBlock, held_msg));
+            }
+            Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
+                // Transient STATUS_DELETE_PENDING while previous holder closes its handle.
+                std::thread::yield_now();
+                continue;
+            }
+            Err(e)
+                if e.kind() == io::ErrorKind::Unsupported
+                    || matches!(e.raw_os_error(), Some(1 | 50)) =>
+            {
+                return pid_fallback();
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    Err(io::Error::new(io::ErrorKind::WouldBlock, held_msg))
+}
+
+#[cfg(not(windows))]
 fn acquire_advisory_with_fallback<F>(
     lock_path: PathBuf,
     held_msg: &str,
@@ -84,23 +141,8 @@ where
             .write(true)
             .create(true)
             .truncate(false);
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::OpenOptionsExt;
-            // Omit FILE_SHARE_DELETE (0x4) so another process cannot delete the lock file
-            // while this handle is open (prevents STATUS_DELETE_PENDING / PermissionDenied).
-            open_opts.share_mode(0x1 | 0x2);
-        }
 
-        let file = match open_opts.open(&lock_path) {
-            Ok(f) => f,
-            #[cfg(windows)]
-            Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
-                std::thread::yield_now();
-                continue;
-            }
-            Err(e) => return Err(e),
-        };
+        let file = open_opts.open(&lock_path)?;
 
         match file.try_lock_exclusive() {
             Ok(()) => {
@@ -116,7 +158,9 @@ where
                 drop(file);
             }
             Err(e) => {
-                if e.kind() == io::ErrorKind::WouldBlock {
+                if e.kind() == io::ErrorKind::WouldBlock
+                    || e.raw_os_error() == fs2::lock_contended_error().raw_os_error()
+                {
                     return Err(io::Error::new(io::ErrorKind::WouldBlock, held_msg));
                 }
                 let is_unsupported = e.kind() == io::ErrorKind::Unsupported
@@ -322,6 +366,16 @@ mod tests {
         assert!(
             !flat_lock_path.exists(),
             "flat .version-history.lock file should be removed when lock is dropped"
+        );
+
+        // 3. Pre-existing stale .lock file on disk is acquired and removed on drop
+        fs::create_dir_all(dir.join(".version-history")).unwrap();
+        fs::write(&hist_lock, b"").unwrap();
+        let stale_lock = acquire_lock(&dir).expect("should acquire pre-existing stale .lock");
+        drop(stale_lock);
+        assert!(
+            !hist_lock.exists(),
+            "pre-existing stale .lock file should be removed when lock is dropped"
         );
 
         let _ = fs::remove_dir_all(&dir);
